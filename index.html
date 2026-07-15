@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Nanogamz</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.css" />
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<!-- Top Bar -->
+<div class="top-bar">
+    <button class="menu-btn" id="menuToggle">☰</button>
+    <div class="title">Nanogamz</div>
+    <button class="icon-btn" id="searchToggle">🔍</button>
+    <button class="icon-btn" id="refreshBtn">⟳</button>
+</div>
+
+<!-- Ad Carousel -->
+<div class="ad-carousel swiper" id="adCarousel">
+    <div class="swiper-wrapper" id="adWrapper"></div>
+</div>
+
+<!-- Category Bar -->
+<div class="cat-bar" id="catBar"></div>
+
+<!-- Game Grid -->
+<div class="game-grid" id="gameGrid">
+    <div class="grid" id="gridContainer"></div>
+</div>
+
+<!-- Game Modal -->
+<div class="game-modal" id="gameModal">
+    <iframe id="gameIframe" allow="fullscreen" allowfullscreen></iframe>
+    <button class="close-btn" id="modalClose">✕ Close</button>
+</div>
+
+<!-- Side Menu -->
+<div class="menu-overlay" id="menuOverlay"></div>
+<div class="menu-panel" id="menuPanel">
+    <!-- User Card -->
+    <div class="user-card" id="userCard">
+        <div class="top">
+            <div class="avatar"><img id="userAvatar" src="assets/default-avatar.png" alt="avatar" /></div>
+            <div>
+                <div class="name" id="userName">Player</div>
+                <div class="id" id="userId">ID: -</div>
+            </div>
+        </div>
+        <div>
+            <div class="continue">▶ Continue Playing</div>
+            <div class="recent-games" id="recentGames"></div>
+        </div>
+    </div>
+
+    <a class="menu-link" id="shareLink">🔗 Share App</a>
+    <a class="menu-link" href="https://t.me/your_channel" target="_blank">📢 Channel</a>
+    <a class="menu-link" id="supportLink">💬 Support</a>
+    <a class="menu-link" id="copyrightLink">⚖️ Copyright</a>
+    <a class="menu-link" id="privacyLink">🔒 Privacy</a>
+
+    <div class="theme-section">
+        <div style="font-size:13px; opacity:0.6; margin-bottom:4px;">CUSTOM THEME</div>
+        <div class="segmented" id="themeSegmented">
+            <button class="seg-option active" data-mode="theme">Theme</button>
+            <button class="seg-option" data-mode="accent">Accent</button>
+            <button class="seg-option" data-mode="text">Text</button>
+        </div>
+        <div class="color-palette" id="colorPalette"></div>
+    </div>
+</div>
+
+<!-- Scripts -->
+<script src="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.js"></script>
+<script src="ads.js"></script>
+<script src="app.js"></script>
+</body>
+  </html>
+  
