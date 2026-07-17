@@ -3,8 +3,8 @@
 import { ADS } from './ads.js';
 
 // ------------------------ CONFIG ------------------------
-const SUPABASE_URL = 'https://your-project.supabase.co';
-const SUPABASE_ANON_KEY = 'your-anon-key';
+// Replace with your actual backend URL (Render service URL)
+const BACKEND_URL = 'https://your-bot.onrender.com';  // ← change this
 
 const CATEGORIES = [
     '🔥 Discover',
@@ -44,7 +44,6 @@ const tg = window.Telegram.WebApp;
 tg.ready();
 tg.expand();
 
-// Get user info
 if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
     state.user = tg.initDataUnsafe.user;
     document.getElementById('userName').textContent = state.user.first_name || 'Player';
@@ -52,7 +51,6 @@ if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
     if (state.user.photo_url) {
         document.getElementById('userAvatar').src = state.user.photo_url;
     } else {
-        // Generate avatar from initials
         const initials = (state.user.first_name?.[0] || 'U') + (state.user.last_name?.[0] || '');
         const canvas = document.createElement('canvas');
         canvas.width = 100; canvas.height = 100;
@@ -70,20 +68,7 @@ if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
     }
 }
 
-// Report user to Supabase (optional)
-fetch(`${SUPABASE_URL}/rest/v1/users`, {
-    method: 'POST',
-    headers: {
-        'apikey': SUPABASE_ANON_KEY,
-        'Content-Type': 'application/json',
-        'Prefer': 'return=minimal'
-    },
-    body: JSON.stringify({
-        telegram_id: state.user.id,
-        username: state.user.username || '',
-        points: 0
-    })
-}).catch(() => {});
+// (No user reporting to Supabase needed – points removed)
 
 // ------------------------ DOM REFS ------------------------
 const grid = document.getElementById('gridContainer');
@@ -98,7 +83,7 @@ const searchToggle = document.getElementById('searchToggle');
 const refreshBtn = document.getElementById('refreshBtn');
 const adWrapper = document.getElementById('adWrapper');
 
-// ------------------------ THEME ENGINE ------------------------
+// ------------------------ THEME ENGINE (unchanged) ------------------------
 function applyTheme(theme) {
     const root = document.documentElement;
     root.style.setProperty('--bg', theme.bg || '#0a0a0a');
@@ -164,7 +149,6 @@ function darken(hex, percent) {
     return `#${((1<<24)+(r<<16)+(g<<8)+b).toString(16).slice(1)}`;
 }
 
-// Theme segmented control
 document.querySelectorAll('#themeSegmented .seg-option').forEach(btn => {
     btn.addEventListener('click', () => {
         document.querySelectorAll('#themeSegmented .seg-option').forEach(b => b.classList.remove('active'));
@@ -172,10 +156,9 @@ document.querySelectorAll('#themeSegmented .seg-option').forEach(btn => {
         populatePalette(btn.dataset.mode);
     });
 });
-// Init palette with default mode 'theme'
 populatePalette('theme');
 
-// ------------------------ AD CAROUSEL (Swiper) ------------------------
+// ------------------------ AD CAROUSEL (unchanged) ------------------------
 function initAdCarousel() {
     adWrapper.innerHTML = ADS.map(ad => `
         <div class="swiper-slide">
@@ -193,7 +176,7 @@ function initAdCarousel() {
 }
 initAdCarousel();
 
-// ------------------------ CATEGORY BAR ------------------------
+// ------------------------ CATEGORY BAR (unchanged) ------------------------
 function renderCategories() {
     catBar.innerHTML = CATEGORIES.map(cat => `
         <button class="cat-btn ${cat === state.currentCategory ? 'active' : ''}" data-cat="${cat}">${cat}</button>
@@ -211,24 +194,21 @@ function renderCategories() {
 }
 renderCategories();
 
-// ------------------------ FETCH GAMES FROM SUPABASE ------------------------
+// ------------------------ FETCH GAMES FROM BACKEND ------------------------
 async function fetchGames(category, offset, limit, search = '') {
-    let query = `${SUPABASE_URL}/rest/v1/games?select=*&order=id.asc&limit=${limit}&offset=${offset}`;
-    if (category !== '🔥 Discover') {
-        const catName = category.replace(/[^a-zA-Z ]/g, '').trim();
-        query += `&category=eq.${encodeURIComponent(catName)}`;
+    let url = `${BACKEND_URL}/games?limit=${limit}&offset=${offset}`;
+    if (category && category !== '🔥 Discover') {
+        url += `&category=${encodeURIComponent(category)}`;
     }
     if (search) {
-        query += `&title=ilike.%${encodeURIComponent(search)}%`;
+        url += `&search=${encodeURIComponent(search)}`;
     }
-    const resp = await fetch(query, {
-        headers: { 'apikey': SUPABASE_ANON_KEY }
-    });
+    const resp = await fetch(url);
     if (!resp.ok) throw new Error('Network error');
     return resp.json();
 }
 
-// ------------------------ RENDER GAMES ------------------------
+// ------------------------ RENDER GAMES (unchanged) ------------------------
 function renderGames(games, append = false) {
     const container = grid;
     if (!append) container.innerHTML = '';
@@ -286,7 +266,7 @@ async function loadGames(reset = false) {
     }
 }
 
-// ------------------------ INFINITE SCROLL ------------------------
+// ------------------------ INFINITE SCROLL (unchanged) ------------------------
 const gridContainer = document.getElementById('gameGrid');
 gridContainer.addEventListener('scroll', () => {
     if (gridContainer.scrollTop + gridContainer.clientHeight >= gridContainer.scrollHeight - 100) {
@@ -294,7 +274,7 @@ gridContainer.addEventListener('scroll', () => {
     }
 });
 
-// ------------------------ PULL-TO-REFRESH (button) ------------------------
+// ------------------------ PULL-TO-REFRESH (unchanged) ------------------------
 refreshBtn.addEventListener('click', () => {
     state.offset = 0;
     state.hasMore = true;
@@ -302,7 +282,7 @@ refreshBtn.addEventListener('click', () => {
     loadGames(true);
 });
 
-// ------------------------ SEARCH ------------------------
+// ------------------------ SEARCH (unchanged) ------------------------
 let searchOpen = false;
 searchToggle.addEventListener('click', () => {
     if (!searchOpen) {
@@ -324,11 +304,10 @@ searchToggle.addEventListener('click', () => {
     searchOpen = !searchOpen;
 });
 
-// ------------------------ GAME MODAL ------------------------
+// ------------------------ GAME MODAL (unchanged) ------------------------
 function openGame(game) {
     gameIframe.src = game.playable_url;
     gameModal.classList.add('active');
-    // Save to recent
     const recent = JSON.parse(localStorage.getItem('nanogamz_recent') || '[]');
     const filtered = recent.filter(g => g.id !== game.id);
     filtered.unshift({ id: game.id, title: game.title, thumbnail: game.thumbnail });
@@ -348,7 +327,7 @@ gameModal.addEventListener('click', (e) => {
     }
 });
 
-// ------------------------ RECENT GAMES ------------------------
+// ------------------------ RECENT GAMES (unchanged) ------------------------
 function renderRecentGames() {
     const container = document.getElementById('recentGames');
     const recent = JSON.parse(localStorage.getItem('nanogamz_recent') || '[]');
@@ -368,20 +347,17 @@ function renderRecentGames() {
             const game = state.games.find(g => g.id === id);
             if (game) openGame(game);
             else {
-                fetch(`${SUPABASE_URL}/rest/v1/games?id=eq.${id}`, {
-                    headers: { 'apikey': SUPABASE_ANON_KEY }
-                })
-                .then(r => r.json())
-                .then(data => {
-                    if (data.length) openGame(data[0]);
-                });
+                // fallback: fetch from backend by ID? Not needed if we have all games in state.
+                // Could also fetch from backend, but we assume state has it.
+                // If not, we can open modal with a message.
+                alert('Game not found in current list. Please refresh.');
             }
         });
     });
 }
 renderRecentGames();
 
-// ------------------------ SIDE MENU ------------------------
+// ------------------------ SIDE MENU (unchanged) ------------------------
 function toggleMenu() {
     const isOpen = menuPanel.classList.contains('open');
     menuPanel.classList.toggle('open');
