@@ -1,55 +1,56 @@
 import os
 import logging
-import asyncio
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Query
+from fastapi.middleware.cors import CORSMiddleware
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from supabase import create_client, Client
-import sync_games  # for manual sync
 import requests
+import sync_games  # for manual sync
+from typing import Optional
 
 # --- Config ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")   # anon key (for reads) or service role
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")   # service role key (or anon, but service role is recommended)
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x]
+WEBAPP_URL = os.getenv("WEBAPP_URL", "https://your-username.github.io/nanogamz/")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# --- Handlers ---
+# --- FastAPI app with CORS ---
+app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, replace with your GitHub Pages URL
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# --- Bot Handlers ---
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    args = message.text.split()
-    referrer_id = None
-    if len(args) > 1 and args[1].startswith("ref_"):
-        try:
-            referrer_id = int(args[1].split("_")[1])
-        except:
-            pass
+    """
+    /start handler – no referral logic.
+    Just saves the user (if not exists) and sends the welcome message.
+    """
+    user = message.from_user
+    user_id = user.id
+    username = user.username or ""
 
-    user_id = message.from_user.id
-    username = message.from_user.username or ""
-
-    # Insert or update user
+    # Insert or update user (no referred_by, no points)
     user_data = {
         "telegram_id": user_id,
         "username": username,
-        "referred_by": referrer_id if referrer_id else None
     }
-    if referrer_id:
-        # Check if referrer exists
-        ref_user = supabase.table("users").select("telegram_id").eq("telegram_id", referrer_id).execute()
-        if ref_user.data:
-            # Add points to referrer
-            supabase.table("users").update({"points": supabase.raw("points + 10")}).eq("telegram_id", referrer_id).execute()
-            user_data["points"] = 10
     supabase.table("users").upsert(user_data).execute()
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎮 Play Nanogamz", web_app=WebAppInfo(url="https://your-username.github.io/nanogamz/"))],
+        [InlineKeyboardButton(text="🎮 Play Nanogamz", web_app=WebAppInfo(url=WEBAPP_URL))],
         [InlineKeyboardButton(text="📢 Channel", url="https://t.me/your_channel")]
     ])
     await message.answer(
@@ -96,9 +97,32 @@ async def admin_sync_games(callback: types.CallbackQuery):
     else:
         await callback.message.edit_text("❌ Sync failed or no games found.")
 
-# --- FastAPI app ---
-app = FastAPI()
+# --- API endpoint for frontend ---
+@app.get("/games")
+async def get_games(
+    category: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    limit: int = 20,
+    offset: int = 0
+):
+    """
+    Returns games from Supabase with optional filters.
+    Used by the frontend (app.js) to fetch games securely.
+    """
+    try:
+        query = supabase.table("games").select("*").order("id").range(offset, offset + limit - 1)
+        if category and category != "🔥 Discover":
+            # Remove emojis and trim to match DB category
+            clean_cat = ''.join(ch for ch in category if ch.isalpha() or ch == ' ').strip()
+            query = query.eq("category", clean_cat)
+        if search:
+            query = query.ilike("title", f"%{search}%")
+        result = query.execute()
+        return result.data
+    except Exception as e:
+        return {"error": str(e)}, 500
 
+# --- Webhook endpoint ---
 @app.post("/webhook")
 async def webhook(request: Request):
     data = await request.json()
@@ -115,4 +139,4 @@ async def startup():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8080)
-  
+    
