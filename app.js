@@ -370,13 +370,13 @@ menuOverlay.addEventListener('click', toggleMenu);
 document.getElementById('shareLink').addEventListener('click', (e) => {
     e.preventDefault();
     const ref = state.user ? state.user.id : '';
-    const link = `https://t.me/your_bot?start=ref_${ref}`;
+    const link = `https://t.me/Nanogamz_bot?start=ref_${ref}`;
     tg.openTelegramLink(link);
     toggleMenu();
 });
 document.getElementById('supportLink').addEventListener('click', (e) => {
     e.preventDefault();
-    tg.openTelegramLink('https://t.me/your_support');
+    tg.openTelegramLink('t.me/ojareridominion');
     toggleMenu();
 });
 document.getElementById('copyrightLink').addEventListener('click', (e) => {
