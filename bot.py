@@ -23,7 +23,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x]
-WEBAPP_URL = os.getenv("WEBAPP_URL", "https://your-username.github.io/nanogamz/")
+WEBAPP_URL = os.getenv("WEBAPP_URL")
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")  # automatically set by Render
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -110,7 +110,7 @@ async def cmd_start(message: types.Message):
     user_data = {"telegram_id": user.id, "username": user.username or ""}
     supabase.table("users").upsert(user_data).execute()
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎮 Play Nanogamz", web_app=WebAppInfo(url=https://247ood-del.github.io/Nanogamz/))],
+        [InlineKeyboardButton(text="🎮 Play Nanogamz", web_app=WebAppInfo(url=WEBAPP_URL))],
         [InlineKeyboardButton(text="📢 Channel", url="https://t.me/nanogamz")]
     ])
     await message.answer(
