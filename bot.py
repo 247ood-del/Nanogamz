@@ -1,5 +1,6 @@
 import os
 import logging
+import asyncio
 from fastapi import FastAPI, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from aiogram import Bot, Dispatcher, types, F
@@ -13,7 +14,7 @@ from typing import Optional
 # --- Config ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")   # service role key (or anon, but service role is recommended)
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")   # service role key
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x]
 WEBAPP_URL = os.getenv("WEBAPP_URL", "https://your-username.github.io/nanogamz/")
 
@@ -130,10 +131,27 @@ async def webhook(request: Request):
     await dp.feed_update(bot, update)
     return {"ok": True}
 
+# --- Startup with retry logic for webhook ---
 @app.on_event("startup")
 async def startup():
-    webhook_url = os.getenv("RENDER_EXTERNAL_URL") + "/webhook"
-    await bot.set_webhook(webhook_url)
+    webhook_url = os.getenv("RENDER_EXTERNAL_URL")
+    if not webhook_url:
+        logging.error("RENDER_EXTERNAL_URL not set; webhook cannot be configured.")
+        return
+    webhook_url += "/webhook"
+    
+    # Retry up to 3 times with exponential backoff
+    for attempt in range(3):
+        try:
+            await bot.set_webhook(webhook_url)
+            logging.info(f"Webhook set successfully to {webhook_url}")
+            break
+        except Exception as e:
+            logging.warning(f"Attempt {attempt+1} to set webhook failed: {e}")
+            if attempt < 2:
+                await asyncio.sleep(2 ** attempt)  # 1s, 2s
+            else:
+                logging.error("Failed to set webhook after 3 attempts. Bot may not receive updates.")
 
 # For local testing
 if __name__ == "__main__":
