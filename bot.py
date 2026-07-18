@@ -110,8 +110,8 @@ async def cmd_start(message: types.Message):
     user_data = {"telegram_id": user.id, "username": user.username or ""}
     supabase.table("users").upsert(user_data).execute()
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎮 Play Nanogamz", web_app=WebAppInfo(url=WEBAPP_URL))],
-        [InlineKeyboardButton(text="📢 Channel", url="https://t.me/your_channel")]
+        [InlineKeyboardButton(text="🎮 Play Nanogamz", web_app=WebAppInfo(url=https://247ood-del.github.io/Nanogamz/))],
+        [InlineKeyboardButton(text="📢 Channel", url="https://t.me/nanogamz")]
     ])
     await message.answer(
         "🎮 **Welcome to Nanogamz!**\n\nYour go‑to hub for instant HTML5 games.\nClick the button below to start playing!",
