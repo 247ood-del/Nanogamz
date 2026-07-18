@@ -4,7 +4,7 @@ import { ADS } from './ads.js';
 
 // ------------------------ CONFIG ------------------------
 // Replace with your actual backend URL (Render service URL)
-const BACKEND_URL = 'https://your-bot.onrender.com';  // ← change this
+const BACKEND_URL = 'https://nanogamz.onrender.com';  // ← change this
 
 const CATEGORIES = [
     '🔥 Discover',
