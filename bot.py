@@ -1,6 +1,7 @@
 import os
 import logging
 import json
+import asyncio
 from fastapi import FastAPI, Request, Query, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -10,38 +11,35 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from aiogram.types import Update
 from supabase import create_client, Client
 import requests
-import sync_games  # for manual sync
+import sync_games
 from typing import Optional
 
-# --- Configure logging ---
+# --- Logging ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # --- Config ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")   # service role key
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x]
 WEBAPP_URL = os.getenv("WEBAPP_URL", "https://your-username.github.io/nanogamz/")
-RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")  # will be set by Render
-
-if not RENDER_EXTERNAL_URL:
-    logger.warning("RENDER_EXTERNAL_URL not set; webhook setup may fail.")
+RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")  # automatically set by Render
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# --- FastAPI app with CORS ---
+# --- FastAPI app ---
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with your GitHub Pages URL
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ------------------------ ROOT / HEALTH ------------------------
+# --- Root & Health ---
 @app.get("/")
 async def root():
     return {"status": "Nanogamz Bot is running"}
@@ -50,39 +48,25 @@ async def root():
 async def health():
     return {"status": "ok"}
 
-# ------------------------ WEBHOOK ROUTER ------------------------
+# --- Webhook Router ---
 router = APIRouter(prefix="/api")
 
 @router.post("/telegram-webhook")
 async def handle_webhook(request: Request):
-    """Handles incoming messages from Telegram"""
     try:
-        # Read raw body for logging
         body = await request.body()
         body_str = body.decode('utf-8')
-        logger.info(f"Webhook received raw body: {body_str[:500]}...")  # log first 500 chars
-
+        logger.info(f"Webhook raw (first 200): {body_str[:200]}...")
         data = json.loads(body_str)
-        update_type = "unknown"
-        if "pre_checkout_query" in data:
-            update_type = "pre_checkout_query"
-        elif "message" in data:
-            update_type = "message"
-        elif "callback_query" in data:
-            update_type = "callback_query"
-        logger.info(f"Update type: {update_type}, update_id: {data.get('update_id')}")
-
-        # Convert to aiogram Update object
         update = Update(**data)
         await dp.feed_update(bot, update)
         return {"ok": True}
     except Exception as e:
-        logger.error(f"Webhook Error: {e}", exc_info=True)
+        logger.error(f"Webhook error: {e}", exc_info=True)
         return {"ok": False, "error": str(e)}
 
 @router.get("/set-webhook")
 async def set_webhook(request: Request):
-    """Set webhook using RENDER_EXTERNAL_URL (or fallback to host header)."""
     try:
         if RENDER_EXTERNAL_URL:
             base_url = RENDER_EXTERNAL_URL.rstrip('/')
@@ -92,8 +76,8 @@ async def set_webhook(request: Request):
                 return {"status": "error", "message": "Cannot determine host"}
             base_url = f"https://{host}"
         webhook_url = f"{base_url}/api/telegram-webhook"
-        logger.info(f"Setting webhook to: {webhook_url}")
         await bot.set_webhook(url=webhook_url, drop_pending_updates=True)
+        logger.info(f"Webhook set to {webhook_url}")
         return {"status": "Webhook updated", "new_url": webhook_url}
     except Exception as e:
         logger.error(f"Failed to set webhook: {e}", exc_info=True)
@@ -101,7 +85,6 @@ async def set_webhook(request: Request):
 
 @router.get("/webhook-status")
 async def webhook_status():
-    """Get current webhook info from Telegram API."""
     try:
         info = await bot.get_webhook_info()
         return {
@@ -117,24 +100,15 @@ async def webhook_status():
         logger.error(f"Failed to get webhook info: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
 
-# Include the router
 app.include_router(router)
 
-# ------------------------ BOT HANDLERS ------------------------
-
+# --- Bot Handlers ---
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    logger.info(f"Received /start from user {message.from_user.id}")
+    logger.info(f"/start from user {message.from_user.id}")
     user = message.from_user
-    user_id = user.id
-    username = user.username or ""
-
-    user_data = {
-        "telegram_id": user_id,
-        "username": username,
-    }
+    user_data = {"telegram_id": user.id, "username": user.username or ""}
     supabase.table("users").upsert(user_data).execute()
-
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎮 Play Nanogamz", web_app=WebAppInfo(url=WEBAPP_URL))],
         [InlineKeyboardButton(text="📢 Channel", url="https://t.me/your_channel")]
@@ -145,10 +119,9 @@ async def cmd_start(message: types.Message):
         parse_mode="Markdown"
     )
 
-# --- Admin commands ---
 @dp.message(Command("admin"), F.from_user.id.in_(ADMIN_IDS))
 async def cmd_admin(message: types.Message):
-    logger.info(f"Received /admin from admin user {message.from_user.id}")
+    logger.info(f"/admin from admin user {message.from_user.id}")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔍 Check Broken Links", callback_data="admin_check_broken")],
         [InlineKeyboardButton(text="🔄 Sync Games Now", callback_data="admin_sync_games")]
@@ -184,7 +157,7 @@ async def admin_sync_games(callback: types.CallbackQuery):
     else:
         await callback.message.edit_text("❌ Sync failed or no games found.")
 
-# ------------------------ API ENDPOINT FOR FRONTEND ------------------------
+# --- API for frontend ---
 @app.get("/games")
 async def get_games(
     category: Optional[str] = Query(None),
@@ -204,7 +177,26 @@ async def get_games(
     except Exception as e:
         return {"error": str(e)}, 500
 
-# For local testing
+# --- Startup: set webhook automatically (with retry) ---
+@app.on_event("startup")
+async def startup():
+    if not RENDER_EXTERNAL_URL:
+        logger.warning("RENDER_EXTERNAL_URL not set; webhook will not be auto-set.")
+        return
+    webhook_url = f"{RENDER_EXTERNAL_URL.rstrip('/')}/api/telegram-webhook"
+    # Retry up to 3 times
+    for attempt in range(3):
+        try:
+            await bot.set_webhook(url=webhook_url, drop_pending_updates=True)
+            logger.info(f"Startup: Webhook set to {webhook_url}")
+            return
+        except Exception as e:
+            logger.warning(f"Startup webhook attempt {attempt+1} failed: {e}")
+            if attempt < 2:
+                await asyncio.sleep(2 ** attempt)  # 1, 2 seconds
+    logger.error("Startup: Failed to set webhook after 3 attempts.")
+
+# --- For local testing ---
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8080)
