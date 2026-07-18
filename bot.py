@@ -1,11 +1,11 @@
 import os
 import logging
-import asyncio
-from fastapi import FastAPI, Request, Query
+from fastapi import FastAPI, Request, Query, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+from aiogram.types import Update
 from supabase import create_client, Client
 import requests
 import sync_games  # for manual sync
@@ -26,24 +26,61 @@ dp = Dispatcher()
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with your GitHub Pages URL
+    allow_origins=["*"],  # In production, restrict to your GitHub Pages URL
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- Bot Handlers ---
+# ------------------------ WEBHOOK ROUTER ------------------------
+router = APIRouter(prefix="/api")
+
+@router.post("/telegram-webhook")
+async def handle_webhook(request: Request):
+    """Handles incoming messages from Telegram"""
+    try:
+        data = await request.json()
+        # Log update type for debugging
+        update_type = "unknown"
+        if "pre_checkout_query" in data:
+            update_type = "pre_checkout_query"
+        elif "message" in data:
+            update_type = "message"
+        elif "callback_query" in data:
+            update_type = "callback_query"
+        logging.info(f"Webhook received: update_id={data.get('update_id')}, type={update_type}")
+
+        update = Update(**data)
+        await dp.feed_update(bot, update)
+        return {"ok": True}
+    except Exception as e:
+        logging.error(f"Webhook Error: {e}", exc_info=True)
+        return {"ok": False, "error": str(e)}
+
+@router.get("/set-webhook")
+async def set_webhook(request: Request):
+    """Manually set the webhook URL to the current host + /api/telegram-webhook"""
+    try:
+        host = request.headers.get("host")
+        url = f"https://{host}/api/telegram-webhook"
+        await bot.set_webhook(url=url, drop_pending_updates=True)
+        logging.info(f"Webhook manually set to {url}")
+        return {"status": "Webhook updated", "new_url": url}
+    except Exception as e:
+        logging.error(f"Failed to set webhook: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+# Include the router
+app.include_router(router)
+
+# ------------------------ BOT HANDLERS ------------------------
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    """
-    /start handler – no referral logic.
-    Just saves the user (if not exists) and sends the welcome message.
-    """
     user = message.from_user
     user_id = user.id
     username = user.username or ""
 
-    # Insert or update user (no referred_by, no points)
+    # Insert or update user (no referral, no points)
     user_data = {
         "telegram_id": user_id,
         "username": username,
@@ -98,7 +135,7 @@ async def admin_sync_games(callback: types.CallbackQuery):
     else:
         await callback.message.edit_text("❌ Sync failed or no games found.")
 
-# --- API endpoint for frontend ---
+# ------------------------ API ENDPOINT FOR FRONTEND ------------------------
 @app.get("/games")
 async def get_games(
     category: Optional[str] = Query(None),
@@ -106,14 +143,9 @@ async def get_games(
     limit: int = 20,
     offset: int = 0
 ):
-    """
-    Returns games from Supabase with optional filters.
-    Used by the frontend (app.js) to fetch games securely.
-    """
     try:
         query = supabase.table("games").select("*").order("id").range(offset, offset + limit - 1)
         if category and category != "🔥 Discover":
-            # Remove emojis and trim to match DB category
             clean_cat = ''.join(ch for ch in category if ch.isalpha() or ch == ' ').strip()
             query = query.eq("category", clean_cat)
         if search:
@@ -123,35 +155,7 @@ async def get_games(
     except Exception as e:
         return {"error": str(e)}, 500
 
-# --- Webhook endpoint ---
-@app.post("/webhook")
-async def webhook(request: Request):
-    data = await request.json()
-    update = types.Update(**data)
-    await dp.feed_update(bot, update)
-    return {"ok": True}
-
-# --- Startup with retry logic for webhook ---
-@app.on_event("startup")
-async def startup():
-    webhook_url = os.getenv("RENDER_EXTERNAL_URL")
-    if not webhook_url:
-        logging.error("RENDER_EXTERNAL_URL not set; webhook cannot be configured.")
-        return
-    webhook_url += "/webhook"
-    
-    # Retry up to 3 times with exponential backoff
-    for attempt in range(3):
-        try:
-            await bot.set_webhook(webhook_url)
-            logging.info(f"Webhook set successfully to {webhook_url}")
-            break
-        except Exception as e:
-            logging.warning(f"Attempt {attempt+1} to set webhook failed: {e}")
-            if attempt < 2:
-                await asyncio.sleep(2 ** attempt)  # 1s, 2s
-            else:
-                logging.error("Failed to set webhook after 3 attempts. Bot may not receive updates.")
+# --- No automatic webhook on startup – you set it manually via /api/set-webhook ---
 
 # For local testing
 if __name__ == "__main__":
