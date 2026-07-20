@@ -12,28 +12,30 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 GAMEPIX_SID = os.getenv("GAMEPIX_SID", "F5123")
 
-# Try these pagination values in order; first one that works is used
-PAGINATION_VALUES = [500, 300, 200, 100, 96]
+# List of (url_suffix, label) to try
+FETCH_CONFIGS = [
+    (f"?sid={GAMEPIX_SID}", "no pagination"),          # try without pagination first
+    (f"?sid={GAMEPIX_SID}&pagination=96", "pagination=96")  # fallback
+]
 
 def fetch_gamepix_games():
     """
-    Fetch games from GamePix. Tries multiple pagination values.
+    Fetch games from GamePix, trying different URL configurations.
     Returns a list of game dicts (or empty on failure).
     """
-    for pagination in PAGINATION_VALUES:
-        url = f"https://feeds.gamepix.com/v2/json?sid={GAMEPIX_SID}&pagination={pagination}"
-        logger.info(f"Trying pagination={pagination} with URL: {url}")
+    for url_suffix, label in FETCH_CONFIGS:
+        url = f"https://feeds.gamepix.com/v2/json{url_suffix}"
+        logger.info(f"Trying {label}: {url}")
 
         try:
             resp = requests.get(url, timeout=30)
-            # If 400, we skip to the next pagination value
-            if resp.status_code == 400:
-                logger.warning(f"Pagination {pagination} returned 400 Bad Request, trying next.")
+            if resp.status_code != 200:
+                logger.warning(f"{label} returned status {resp.status_code}, skipping.")
                 continue
-            resp.raise_for_status()
+
             data = resp.json()
 
-            # --- Parse response (same as before) ---
+            # Parse response
             raw_items = []
             if isinstance(data, list):
                 raw_items = data
@@ -49,10 +51,10 @@ def fetch_gamepix_games():
                             break
 
             if not raw_items:
-                logger.info(f"Pagination {pagination} returned empty list, trying next.")
+                logger.info(f"{label} returned empty list, trying next.")
                 continue
 
-            logger.info(f"Pagination {pagination} returned {len(raw_items)} games.")
+            logger.info(f"{label} returned {len(raw_items)} games.")
 
             # Process each item
             games = []
@@ -81,19 +83,18 @@ def fetch_gamepix_games():
                     "updated_at": datetime.utcnow().isoformat()
                 })
 
-            # If we got games, return them
             if games:
-                logger.info(f"Successfully fetched {len(games)} games with pagination={pagination}.")
+                logger.info(f"Successfully fetched {len(games)} games with {label}.")
                 return games
             else:
-                logger.warning(f"Pagination {pagination} returned 0 games, trying next.")
+                logger.warning(f"{label} returned 0 games, trying next.")
 
         except Exception as e:
-            logger.error(f"Error with pagination={pagination}: {e}", exc_info=True)
+            logger.error(f"Error with {label}: {e}", exc_info=True)
             continue
 
-    # If we exhaust all values, return empty
-    logger.error("All pagination values failed. No games fetched.")
+    # If we exhaust all configs, return empty
+    logger.error("All fetch configurations failed. No games fetched.")
     return []
 
 
