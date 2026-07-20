@@ -3,8 +3,8 @@
 import { ADS } from './ads.js';
 
 // ------------------------ CONFIG ------------------------
-// Replace with your actual backend URL (Render service URL)
-const BACKEND_URL = 'https://nanogamz.onrender.com';  // ← change this
+// Use the URL set in index.html (or fallback)
+const BACKEND_URL = window.BACKEND_URL || 'https://nanogamz.onrender.com';
 
 const CATEGORIES = [
     '🔥 Discover',
@@ -347,9 +347,6 @@ function renderRecentGames() {
             const game = state.games.find(g => g.id === id);
             if (game) openGame(game);
             else {
-                // fallback: fetch from backend by ID? Not needed if we have all games in state.
-                // Could also fetch from backend, but we assume state has it.
-                // If not, we can open modal with a message.
                 alert('Game not found in current list. Please refresh.');
             }
         });
