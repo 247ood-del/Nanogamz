@@ -2,6 +2,7 @@ import os
 import logging
 import asyncio
 import time
+import threading
 import fcntl
 from fastapi import FastAPI, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,6 +12,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from supabase import create_client, Client
 import requests
 import sync_games
+import ping  # <-- import the pinger module
 from typing import Optional
 
 # Import the webhook router factory
@@ -26,7 +28,7 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x]
 WEBAPP_URL = os.getenv("WEBAPP_URL")
-RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")  # automatically set by Render
+RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
 
 # --- Supabase & Bot ---
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -42,7 +44,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- Include webhook router (pass bot and dp) ---
+# --- Include webhook router ---
 app.include_router(create_webhook_router(bot, dp))
 
 # --- Root & Health ---
@@ -141,28 +143,24 @@ def set_webhook_once():
     expected_url = f"{RENDER_EXTERNAL_URL.rstrip('/')}/api/telegram-webhook"
 
     try:
-        # Try to acquire an exclusive lock (non‑blocking)
         with open(WEBHOOK_LOCK_FILE, "w") as lock_file:
             fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
-            # Check current webhook status
+            # Check current webhook
             try:
                 current = bot.get_webhook_info()
                 if current.url == expected_url:
                     logger.info("Webhook already correctly set, skipping.")
                     return
             except Exception:
-                pass  # if we can't get info, proceed to set
+                pass
 
-            # Set the webhook
             bot.set_webhook(url=expected_url, drop_pending_updates=True)
             logger.info(f"Webhook set to {expected_url}")
 
     except BlockingIOError:
-        # Another worker is already setting the webhook – wait and then do nothing
         logger.info("Another worker is setting the webhook; waiting 2 seconds...")
         time.sleep(2)
-        # Optionally verify it was set
         try:
             current = bot.get_webhook_info()
             if current.url == expected_url:
@@ -174,12 +172,19 @@ def set_webhook_once():
     except Exception as e:
         logger.error(f"Failed to set webhook: {e}")
 
-# --- Startup event ---
+# ========== STARTUP EVENTS ==========
 @app.on_event("startup")
 async def startup():
-    # Run the webhook setup in a separate thread to avoid blocking the event loop
+    # 1. Set webhook (only once)
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, set_webhook_once)
+
+    # 2. Start the background pinger (exactly like VidVids)
+    def start_pinger():
+        ping.run_pinger()
+    thread = threading.Thread(target=start_pinger, daemon=True)
+    thread.start()
+    logger.info("Background pinger started")
 
 # --- For local testing ---
 if __name__ == "__main__":
