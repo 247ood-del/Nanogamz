@@ -6,8 +6,9 @@ from urllib.parse import urlparse, parse_qs, urlunparse, urlencode
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-GAMEPIX_FEED = "https://games.gamepix.com/gameinfo/"
 GAMEPIX_SID = os.getenv("GAMEPIX_SID", "F5123")
+# Use the proper GamePix feed URL (as shown in your screenshot)
+GAMEPIX_FEED = f"https://feeds.gamepix.com/v2/json?sid={GAMEPIX_SID}&pagination=12&page=1"
 
 def fetch_gamepix_games():
     try:
@@ -16,7 +17,6 @@ def fetch_gamepix_games():
         data = resp.json()
         games = []
         for item in data.get("games", []):
-            # Build playable URL with SID parameter
             raw_url = item.get("url", "")
             parsed = urlparse(raw_url)
             query = parse_qs(parsed.query)
@@ -33,8 +33,15 @@ def fetch_gamepix_games():
                 "updated_at": datetime.utcnow().isoformat()
             })
         return games
-    except Exception as e:
-        print(f"Error fetching GamePix: {e}")
+    except requests.exceptions.RequestException as e:
+        print(f"Request error fetching GamePix: {e}")
+        if hasattr(e, 'response') and e.response:
+            print(f"Response status: {e.response.status_code}, body: {e.response.text[:200]}")
+        return []
+    except ValueError as e:
+        print(f"JSON decode error: {e}")
+        if 'resp' in locals():
+            print(f"Response text (first 500): {resp.text[:500]}")
         return []
 
 def upsert_games(supabase: Client, games):
