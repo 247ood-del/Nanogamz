@@ -119,15 +119,64 @@ async def admin_check_broken(callback: types.CallbackQuery):
     else:
         await callback.message.edit_text("✅ All games are reachable.")
 
+# --- Sync lock and background task ---
+_sync_lock = asyncio.Lock()
+
+async def run_sync_and_notify(chat_id: int, message_id: int):
+    """Fetch games from GamePix and bulk upsert them, then edit the original message."""
+    try:
+        # Acquire lock to prevent concurrent syncs
+        if _sync_lock.locked():
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text="⏳ A sync is already in progress. Please wait..."
+            )
+            return
+
+        async with _sync_lock:
+            # Fetch games (blocking I/O) in a thread
+            games = await asyncio.to_thread(sync_games.fetch_gamepix_games)
+            if not games:
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text="❌ Sync failed or no games found."
+                )
+                return
+
+            # Bulk upsert – all games in one call (much faster)
+            # The Supabase client accepts a list of records for upsert
+            await asyncio.to_thread(
+                supabase.table("games").upsert(games).execute
+            )
+
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=f"✅ Synced {len(games)} games from GamePix."
+            )
+    except Exception as e:
+        logger.error(f"Background sync error: {e}", exc_info=True)
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=f"❌ Sync error: {str(e)[:200]}"
+            )
+        except Exception:
+            pass
+
 @dp.callback_query(F.data == "admin_sync_games")
 async def admin_sync_games(callback: types.CallbackQuery):
-    await callback.answer("Syncing...")
-    games = sync_games.fetch_gamepix_games()
-    if games:
-        sync_games.upsert_games(supabase, games)
-        await callback.message.edit_text(f"✅ Synced {len(games)} games from GamePix.")
-    else:
-        await callback.message.edit_text("❌ Sync failed or no games found.")
+    # Acknowledge immediately and show progress
+    await callback.answer("Sync started...")
+    chat_id = callback.message.chat.id
+    message_id = callback.message.message_id
+    await callback.message.edit_text("🔄 Syncing games from GamePix, please wait...")
+
+    # Launch background task – it will edit the message when done
+    asyncio.create_task(run_sync_and_notify(chat_id, message_id))
 
 # ========== WEBHOOK SETUP (async) ==========
 async def set_webhook_async():
