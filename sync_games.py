@@ -2,10 +2,12 @@ import os
 import requests
 from supabase import create_client, Client
 from datetime import datetime
+from urllib.parse import urlparse, parse_qs, urlunparse, urlencode
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 GAMEPIX_FEED = "https://games.gamepix.com/gameinfo/"
+GAMEPIX_SID = os.getenv("GAMEPIX_SID", "F5123")
 
 def fetch_gamepix_games():
     try:
@@ -13,13 +15,20 @@ def fetch_gamepix_games():
         resp.raise_for_status()
         data = resp.json()
         games = []
-        # Adjust based on actual GamePix response structure
         for item in data.get("games", []):
+            # Build playable URL with SID parameter
+            raw_url = item.get("url", "")
+            parsed = urlparse(raw_url)
+            query = parse_qs(parsed.query)
+            query["sid"] = GAMEPIX_SID
+            new_query = urlencode(query, doseq=True)
+            playable_url = urlunparse(parsed._replace(query=new_query))
+
             games.append({
-                "id": str(item["id"]),
-                "title": item["title"],
-                "thumbnail": item.get("thumbnail", ""),
-                "playable_url": item["url"],
+                "id": str(item.get("id", "")),
+                "title": item.get("title", ""),
+                "thumbnail": item.get("thumbnailUrl", ""),   # correct key
+                "playable_url": playable_url,
                 "category": item.get("category", "Other"),
                 "updated_at": datetime.utcnow().isoformat()
             })
@@ -43,4 +52,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-  
+    
