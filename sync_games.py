@@ -6,7 +6,6 @@ from supabase import create_client, Client
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs, urlunparse, urlencode
 
-# Setup explicit logging so errors show up clearly in Render logs
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -14,17 +13,16 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 GAMEPIX_SID = os.getenv("GAMEPIX_SID", "F5123")
 
-# REMOVED pagination caps to pull the full master feed directly!
 GAMEPIX_FEED = f"https://feeds.gamepix.com/v2/json?sid={GAMEPIX_SID}&pagination=96"
 
 def fetch_gamepix_games():
+    # ... (unchanged, exactly as before) ...
     try:
         logger.info(f"Fetching master feed from: {GAMEPIX_FEED}")
         resp = requests.get(GAMEPIX_FEED, timeout=30)
         resp.raise_for_status()
         data = resp.json()
         
-        # --- SMART STRUCTURE DETECTION ---
         raw_items = []
         if isinstance(data, list):
             raw_items = data
@@ -34,32 +32,27 @@ def fetch_gamepix_games():
             elif "items" in data:
                 raw_items = data["items"]
             else:
-                # Fallback if wrapped under another master key
                 for val in data.values():
                     if isinstance(val, list):
                         raw_items = val
                         break
 
         if not raw_items:
-            logger.error(f"Could not find a valid list of games in the JSON response. Keys present: {list(data.keys()) if isinstance(data, dict) else 'None'}")
+            logger.error(f"Could not find a valid list of games. Keys: {list(data.keys()) if isinstance(data, dict) else 'None'}")
             return []
 
-        logger.info(f"Successfully located {len(raw_items)} raw feed entries. Processing tracking parameters...")
+        logger.info(f"Located {len(raw_items)} raw entries. Processing...")
         games = []
         for item in raw_items:
-            # GamePix V2 might use 'url' or 'link'
             raw_url = item.get("url") or item.get("link") or ""
             if not raw_url:
                 continue
-                
-            # Safely inject your tracking ID parameter
             parsed = urlparse(raw_url)
             query = parse_qs(parsed.query)
             query["sid"] = GAMEPIX_SID
             new_query = urlencode(query, doseq=True)
             playable_url = urlunparse(parsed._replace(query=new_query))
 
-            # Normalize data keys (V2 often capitalizes or names fields differently)
             game_id = str(item.get("id") or item.get("guid") or hash(raw_url))
             title = item.get("title") or item.get("name") or "Unnamed Game"
             thumbnail = item.get("thumbnailUrl") or item.get("thumbnail") or item.get("image") or ""
@@ -74,30 +67,55 @@ def fetch_gamepix_games():
                 "updated_at": datetime.utcnow().isoformat()
             })
         return games
-
     except Exception as e:
-        logger.error(f"Critical sync execution failure: {e}", exc_info=True)
+        logger.error(f"Critical sync failure: {e}", exc_info=True)
         return []
 
-def upsert_games(supabase: Client, games):
-    logger.info(f"Upserting {len(games)} games in bulk...")
+
+def insert_new_games(supabase: Client, games):
+    """
+    Bulk insert only games whose ID does not already exist in the table.
+    Returns the number of newly inserted games.
+    """
+    if not games:
+        return 0
+
+    # 1. Fetch all existing IDs
     try:
-        supabase.table("games").upsert(games).execute()
+        response = supabase.table("games").select("id").execute()
+        existing_ids = {row["id"] for row in response.data}
     except Exception as e:
-        logger.error(f"Bulk upsert failed: {e}")
+        logger.error(f"Failed to fetch existing game IDs: {e}")
+        return 0
+
+    # 2. Filter out existing IDs
+    new_games = [g for g in games if g["id"] not in existing_ids]
+
+    if not new_games:
+        logger.info("No new games to insert.")
+        return 0
+
+    # 3. Bulk insert the new ones
+    try:
+        supabase.table("games").insert(new_games).execute()
+        logger.info(f"Inserted {len(new_games)} new games.")
+        return len(new_games)
+    except Exception as e:
+        logger.error(f"Bulk insert failed: {e}")
+        return 0
 
 def main():
+    # ... (unchanged, kept for standalone usage) ...
     if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-        logger.error("Missing Supabase connection credentials in environment variables.")
+        logger.error("Missing Supabase credentials.")
         return
-        
     supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
     games = fetch_gamepix_games()
     if games:
-        upsert_games(supabase, games)
-        logger.info(f"✅ Sync process complete! Database holds updated tracking data.")
+        inserted = insert_new_games(supabase, games)
+        logger.info(f"✅ Sync complete! Inserted {inserted} new games.")
     else:
-        logger.warning("❌ Process finished with 0 games ingested.")
+        logger.warning("❌ No games fetched.")
 
 if __name__ == "__main__":
     main()
