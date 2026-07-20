@@ -1,4 +1,4 @@
-# webhook.py
+import os
 import json
 import logging
 from fastapi import APIRouter, Request
@@ -30,7 +30,6 @@ def create_webhook_router(bot, dp):
     @router.get("/set-webhook")
     async def set_webhook(request: Request):
         try:
-            # Determine base URL (prefer RENDER_EXTERNAL_URL, fallback to host header)
             render_url = os.getenv("RENDER_EXTERNAL_URL")
             if render_url:
                 base_url = render_url.rstrip('/')
@@ -65,4 +64,4 @@ def create_webhook_router(bot, dp):
             return {"status": "error", "message": str(e)}
 
     return router
-  
+    
