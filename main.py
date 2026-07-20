@@ -1,18 +1,20 @@
+# main.py (formerly bot.py)
 import os
 import logging
-import json
 import asyncio
-from fastapi import FastAPI, Request, Query, APIRouter
+from fastapi import FastAPI, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
-from aiogram.types import Update
 from supabase import create_client, Client
 import requests
 import sync_games
 from typing import Optional
+
+# Import the webhook router factory
+from webhook import create_webhook_router
 
 # --- Logging ---
 logging.basicConfig(level=logging.INFO)
@@ -26,6 +28,7 @@ ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x]
 WEBAPP_URL = os.getenv("WEBAPP_URL")
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")  # automatically set by Render
 
+# --- Supabase & Bot ---
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -39,6 +42,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- Include webhook router (pass bot and dp) ---
+app.include_router(create_webhook_router(bot, dp))
+
 # --- Root & Health ---
 @app.get("/")
 async def root():
@@ -48,59 +54,25 @@ async def root():
 async def health():
     return {"status": "ok"}
 
-# --- Webhook Router ---
-router = APIRouter(prefix="/api")
-
-@router.post("/telegram-webhook")
-async def handle_webhook(request: Request):
+# --- API for frontend ---
+@app.get("/games")
+async def get_games(
+    category: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    limit: int = 20,
+    offset: int = 0
+):
     try:
-        body = await request.body()
-        body_str = body.decode('utf-8')
-        logger.info(f"Webhook raw (first 200): {body_str[:200]}...")
-        data = json.loads(body_str)
-        update = Update(**data)
-        await dp.feed_update(bot, update)
-        return {"ok": True}
+        query = supabase.table("games").select("*").order("id").range(offset, offset + limit - 1)
+        if category and category != "🔥 Discover":
+            clean_cat = ''.join(ch for ch in category if ch.isalpha() or ch == ' ').strip()
+            query = query.eq("category", clean_cat)
+        if search:
+            query = query.ilike("title", f"%{search}%")
+        result = query.execute()
+        return result.data
     except Exception as e:
-        logger.error(f"Webhook error: {e}", exc_info=True)
-        return {"ok": False, "error": str(e)}
-
-@router.get("/set-webhook")
-async def set_webhook(request: Request):
-    try:
-        if RENDER_EXTERNAL_URL:
-            base_url = RENDER_EXTERNAL_URL.rstrip('/')
-        else:
-            host = request.headers.get("host")
-            if not host:
-                return {"status": "error", "message": "Cannot determine host"}
-            base_url = f"https://{host}"
-        webhook_url = f"{base_url}/api/telegram-webhook"
-        await bot.set_webhook(url=webhook_url, drop_pending_updates=True)
-        logger.info(f"Webhook set to {webhook_url}")
-        return {"status": "Webhook updated", "new_url": webhook_url}
-    except Exception as e:
-        logger.error(f"Failed to set webhook: {e}", exc_info=True)
-        return {"status": "error", "message": str(e)}
-
-@router.get("/webhook-status")
-async def webhook_status():
-    try:
-        info = await bot.get_webhook_info()
-        return {
-            "url": info.url,
-            "has_custom_certificate": info.has_custom_certificate,
-            "pending_update_count": info.pending_update_count,
-            "last_error_date": info.last_error_date,
-            "last_error_message": info.last_error_message,
-            "max_connections": info.max_connections,
-            "allowed_updates": info.allowed_updates
-        }
-    except Exception as e:
-        logger.error(f"Failed to get webhook info: {e}", exc_info=True)
-        return {"status": "error", "message": str(e)}
-
-app.include_router(router)
+        return {"error": str(e)}, 500
 
 # --- Bot Handlers ---
 @dp.message(Command("start"))
@@ -156,26 +128,6 @@ async def admin_sync_games(callback: types.CallbackQuery):
         await callback.message.edit_text(f"✅ Synced {len(games)} games from GamePix.")
     else:
         await callback.message.edit_text("❌ Sync failed or no games found.")
-
-# --- API for frontend ---
-@app.get("/games")
-async def get_games(
-    category: Optional[str] = Query(None),
-    search: Optional[str] = Query(None),
-    limit: int = 20,
-    offset: int = 0
-):
-    try:
-        query = supabase.table("games").select("*").order("id").range(offset, offset + limit - 1)
-        if category and category != "🔥 Discover":
-            clean_cat = ''.join(ch for ch in category if ch.isalpha() or ch == ' ').strip()
-            query = query.eq("category", clean_cat)
-        if search:
-            query = query.ilike("title", f"%{search}%")
-        result = query.execute()
-        return result.data
-    except Exception as e:
-        return {"error": str(e)}, 500
 
 # --- Startup: set webhook automatically (with retry) ---
 @app.on_event("startup")
