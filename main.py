@@ -1,6 +1,8 @@
 import os
 import logging
 import asyncio
+import time
+import fcntl
 from fastapi import FastAPI, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from aiogram import Bot, Dispatcher, types, F
@@ -127,24 +129,57 @@ async def admin_sync_games(callback: types.CallbackQuery):
     else:
         await callback.message.edit_text("❌ Sync failed or no games found.")
 
-# --- Startup: set webhook automatically (with retry) ---
+# ========== WEBHOOK SETUP WITH LOCK ==========
+WEBHOOK_LOCK_FILE = "/tmp/webhook.lock"
+
+def set_webhook_once():
+    """Set the webhook only once using a file lock."""
+    if not RENDER_EXTERNAL_URL:
+        logger.warning("RENDER_EXTERNAL_URL not set; webhook will not be set.")
+        return
+
+    expected_url = f"{RENDER_EXTERNAL_URL.rstrip('/')}/api/telegram-webhook"
+
+    try:
+        # Try to acquire an exclusive lock (non‑blocking)
+        with open(WEBHOOK_LOCK_FILE, "w") as lock_file:
+            fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+            # Check current webhook status
+            try:
+                current = bot.get_webhook_info()
+                if current.url == expected_url:
+                    logger.info("Webhook already correctly set, skipping.")
+                    return
+            except Exception:
+                pass  # if we can't get info, proceed to set
+
+            # Set the webhook
+            bot.set_webhook(url=expected_url, drop_pending_updates=True)
+            logger.info(f"Webhook set to {expected_url}")
+
+    except BlockingIOError:
+        # Another worker is already setting the webhook – wait and then do nothing
+        logger.info("Another worker is setting the webhook; waiting 2 seconds...")
+        time.sleep(2)
+        # Optionally verify it was set
+        try:
+            current = bot.get_webhook_info()
+            if current.url == expected_url:
+                logger.info("Webhook was set by another worker, ready.")
+            else:
+                logger.warning("Webhook not set after waiting; you may need to set it manually via /api/set-webhook.")
+        except Exception:
+            pass
+    except Exception as e:
+        logger.error(f"Failed to set webhook: {e}")
+
+# --- Startup event ---
 @app.on_event("startup")
 async def startup():
-    if not RENDER_EXTERNAL_URL:
-        logger.warning("RENDER_EXTERNAL_URL not set; webhook will not be auto-set.")
-        return
-    webhook_url = f"{RENDER_EXTERNAL_URL.rstrip('/')}/api/telegram-webhook"
-    # Retry up to 3 times
-    for attempt in range(3):
-        try:
-            await bot.set_webhook(url=webhook_url, drop_pending_updates=True)
-            logger.info(f"Startup: Webhook set to {webhook_url}")
-            return
-        except Exception as e:
-            logger.warning(f"Startup webhook attempt {attempt+1} failed: {e}")
-            if attempt < 2:
-                await asyncio.sleep(2 ** attempt)  # 1, 2 seconds
-    logger.error("Startup: Failed to set webhook after 3 attempts.")
+    # Run the webhook setup in a separate thread to avoid blocking the event loop
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, set_webhook_once)
 
 # --- For local testing ---
 if __name__ == "__main__":
