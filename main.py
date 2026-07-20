@@ -123,9 +123,12 @@ async def admin_check_broken(callback: types.CallbackQuery):
 _sync_lock = asyncio.Lock()
 
 async def run_sync_and_notify(chat_id: int, message_id: int):
-    """Fetch games from GamePix and bulk upsert them, then edit the original message."""
+    """
+    Fetch games from GamePix, bulk insert only new ones (skip existing),
+    then edit the original message with the result.
+    """
     try:
-        # Acquire lock to prevent concurrent syncs
+        # Prevent concurrent syncs
         if _sync_lock.locked():
             await bot.edit_message_text(
                 chat_id=chat_id,
@@ -135,7 +138,7 @@ async def run_sync_and_notify(chat_id: int, message_id: int):
             return
 
         async with _sync_lock:
-            # Fetch games (blocking I/O) in a thread
+            # Fetch all games from GamePix (blocking I/O)
             games = await asyncio.to_thread(sync_games.fetch_gamepix_games)
             if not games:
                 await bot.edit_message_text(
@@ -145,16 +148,16 @@ async def run_sync_and_notify(chat_id: int, message_id: int):
                 )
                 return
 
-            # Bulk upsert – all games in one call (much faster)
-            # The Supabase client accepts a list of records for upsert
-            await asyncio.to_thread(
-                supabase.table("games").upsert(games).execute
+            # Insert only new games (bulk) – no duplicates, no upsert
+            inserted = await asyncio.to_thread(
+                sync_games.insert_new_games, supabase, games
             )
 
+            # Report how many new games were added
             await bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=message_id,
-                text=f"✅ Synced {len(games)} games from GamePix."
+                text=f"✅ Synced {inserted} new games from GamePix."
             )
     except Exception as e:
         logger.error(f"Background sync error: {e}", exc_info=True)
