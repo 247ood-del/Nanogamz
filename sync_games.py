@@ -1,4 +1,3 @@
-# sync_games.py
 import os
 import requests
 import logging
@@ -13,89 +12,114 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 GAMEPIX_SID = os.getenv("GAMEPIX_SID", "F5123")
 
-GAMEPIX_FEED = f"https://feeds.gamepix.com/v2/json?sid={GAMEPIX_SID}&pagination=96"
+# Increase pagination to fetch as many as possible in one go
+# You can adjust this value – try 500, 1000, etc.
+PAGINATION_LIMIT = 500  # or 1000
 
 def fetch_gamepix_games():
-    # ... (unchanged, exactly as before) ...
-    try:
-        logger.info(f"Fetching master feed from: {GAMEPIX_FEED}")
-        resp = requests.get(GAMEPIX_FEED, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-        
-        raw_items = []
-        if isinstance(data, list):
-            raw_items = data
-        elif isinstance(data, dict):
-            if "games" in data:
-                raw_items = data["games"]
-            elif "items" in data:
-                raw_items = data["items"]
-            else:
-                for val in data.values():
-                    if isinstance(val, list):
-                        raw_items = val
-                        break
+    """
+    Fetch all games from GamePix using pagination (if needed).
+    Returns a list of game dicts.
+    """
+    all_games = []
+    page = 1
+    max_per_page = PAGINATION_LIMIT
 
-        if not raw_items:
-            logger.error(f"Could not find a valid list of games. Keys: {list(data.keys()) if isinstance(data, dict) else 'None'}")
-            return []
+    while True:
+        # Build URL with page and pagination parameters
+        url = f"https://feeds.gamepix.com/v2/json?sid={GAMEPIX_SID}&page={page}&pagination={max_per_page}"
+        logger.info(f"Fetching page {page} from: {url}")
 
-        logger.info(f"Located {len(raw_items)} raw entries. Processing...")
-        games = []
-        for item in raw_items:
-            raw_url = item.get("url") or item.get("link") or ""
-            if not raw_url:
-                continue
-            parsed = urlparse(raw_url)
-            query = parse_qs(parsed.query)
-            query["sid"] = GAMEPIX_SID
-            new_query = urlencode(query, doseq=True)
-            playable_url = urlunparse(parsed._replace(query=new_query))
+        try:
+            resp = requests.get(url, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
 
-            game_id = str(item.get("id") or item.get("guid") or hash(raw_url))
-            title = item.get("title") or item.get("name") or "Unnamed Game"
-            thumbnail = item.get("thumbnailUrl") or item.get("thumbnail") or item.get("image") or ""
-            category = item.get("category") or "Other"
+            # --- Parse response ---
+            raw_items = []
+            if isinstance(data, list):
+                raw_items = data
+            elif isinstance(data, dict):
+                if "games" in data:
+                    raw_items = data["games"]
+                elif "items" in data:
+                    raw_items = data["items"]
+                else:
+                    # fallback: try to find a list value
+                    for val in data.values():
+                        if isinstance(val, list):
+                            raw_items = val
+                            break
 
-            games.append({
-                "id": game_id,
-                "title": title,
-                "thumbnail": thumbnail,
-                "playable_url": playable_url,
-                "category": category,
-                "updated_at": datetime.utcnow().isoformat()
-            })
-        return games
-    except Exception as e:
-        logger.error(f"Critical sync failure: {e}", exc_info=True)
-        return []
+            if not raw_items:
+                # No more games – stop pagination
+                logger.info(f"No items returned on page {page}, stopping.")
+                break
+
+            logger.info(f"Page {page} returned {len(raw_items)} games.")
+
+            # Process each item
+            for item in raw_items:
+                raw_url = item.get("url") or item.get("link") or ""
+                if not raw_url:
+                    continue
+
+                parsed = urlparse(raw_url)
+                query = parse_qs(parsed.query)
+                query["sid"] = GAMEPIX_SID
+                new_query = urlencode(query, doseq=True)
+                playable_url = urlunparse(parsed._replace(query=new_query))
+
+                game_id = str(item.get("id") or item.get("guid") or hash(raw_url))
+                title = item.get("title") or item.get("name") or "Unnamed Game"
+                thumbnail = item.get("thumbnailUrl") or item.get("thumbnail") or item.get("image") or ""
+                category = item.get("category") or "Other"
+
+                all_games.append({
+                    "id": game_id,
+                    "title": title,
+                    "thumbnail": thumbnail,
+                    "playable_url": playable_url,
+                    "category": category,
+                    "updated_at": datetime.utcnow().isoformat()
+                })
+
+            # If we received fewer than max_per_page, we've reached the end
+            if len(raw_items) < max_per_page:
+                logger.info(f"Received fewer than {max_per_page} items, assuming last page.")
+                break
+
+            # Otherwise, go to next page
+            page += 1
+
+        except Exception as e:
+            logger.error(f"Error fetching page {page}: {e}", exc_info=True)
+            break
+
+    logger.info(f"Total games fetched: {len(all_games)}")
+    return all_games
 
 
 def insert_new_games(supabase: Client, games):
     """
-    Bulk insert only games whose ID does not already exist in the table.
+    Bulk insert only games whose ID does not already exist.
     Returns the number of newly inserted games.
     """
     if not games:
         return 0
 
-    # 1. Fetch all existing IDs
     try:
         response = supabase.table("games").select("id").execute()
         existing_ids = {row["id"] for row in response.data}
     except Exception as e:
-        logger.error(f"Failed to fetch existing game IDs: {e}")
+        logger.error(f"Failed to fetch existing IDs: {e}")
         return 0
 
-    # 2. Filter out existing IDs
     new_games = [g for g in games if g["id"] not in existing_ids]
-
     if not new_games:
         logger.info("No new games to insert.")
         return 0
 
-    # 3. Bulk insert the new ones
     try:
         supabase.table("games").insert(new_games).execute()
         logger.info(f"Inserted {len(new_games)} new games.")
@@ -104,8 +128,8 @@ def insert_new_games(supabase: Client, games):
         logger.error(f"Bulk insert failed: {e}")
         return 0
 
+
 def main():
-    # ... (unchanged, kept for standalone usage) ...
     if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
         logger.error("Missing Supabase credentials.")
         return
