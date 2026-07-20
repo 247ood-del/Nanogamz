@@ -12,30 +12,28 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 GAMEPIX_SID = os.getenv("GAMEPIX_SID", "F5123")
 
-# Increase pagination to fetch as many as possible in one go
-# You can adjust this value – try 500, 1000, etc.
-PAGINATION_LIMIT = 500  # or 1000
+# Try these pagination values in order; first one that works is used
+PAGINATION_VALUES = [500, 300, 200, 100, 96]
 
 def fetch_gamepix_games():
     """
-    Fetch all games from GamePix using pagination (if needed).
-    Returns a list of game dicts.
+    Fetch games from GamePix. Tries multiple pagination values.
+    Returns a list of game dicts (or empty on failure).
     """
-    all_games = []
-    page = 1
-    max_per_page = PAGINATION_LIMIT
-
-    while True:
-        # Build URL with page and pagination parameters
-        url = f"https://feeds.gamepix.com/v2/json?sid={GAMEPIX_SID}&page={page}&pagination={max_per_page}"
-        logger.info(f"Fetching page {page} from: {url}")
+    for pagination in PAGINATION_VALUES:
+        url = f"https://feeds.gamepix.com/v2/json?sid={GAMEPIX_SID}&pagination={pagination}"
+        logger.info(f"Trying pagination={pagination} with URL: {url}")
 
         try:
             resp = requests.get(url, timeout=30)
+            # If 400, we skip to the next pagination value
+            if resp.status_code == 400:
+                logger.warning(f"Pagination {pagination} returned 400 Bad Request, trying next.")
+                continue
             resp.raise_for_status()
             data = resp.json()
 
-            # --- Parse response ---
+            # --- Parse response (same as before) ---
             raw_items = []
             if isinstance(data, list):
                 raw_items = data
@@ -45,20 +43,19 @@ def fetch_gamepix_games():
                 elif "items" in data:
                     raw_items = data["items"]
                 else:
-                    # fallback: try to find a list value
                     for val in data.values():
                         if isinstance(val, list):
                             raw_items = val
                             break
 
             if not raw_items:
-                # No more games – stop pagination
-                logger.info(f"No items returned on page {page}, stopping.")
-                break
+                logger.info(f"Pagination {pagination} returned empty list, trying next.")
+                continue
 
-            logger.info(f"Page {page} returned {len(raw_items)} games.")
+            logger.info(f"Pagination {pagination} returned {len(raw_items)} games.")
 
             # Process each item
+            games = []
             for item in raw_items:
                 raw_url = item.get("url") or item.get("link") or ""
                 if not raw_url:
@@ -75,7 +72,7 @@ def fetch_gamepix_games():
                 thumbnail = item.get("thumbnailUrl") or item.get("thumbnail") or item.get("image") or ""
                 category = item.get("category") or "Other"
 
-                all_games.append({
+                games.append({
                     "id": game_id,
                     "title": title,
                     "thumbnail": thumbnail,
@@ -84,20 +81,20 @@ def fetch_gamepix_games():
                     "updated_at": datetime.utcnow().isoformat()
                 })
 
-            # If we received fewer than max_per_page, we've reached the end
-            if len(raw_items) < max_per_page:
-                logger.info(f"Received fewer than {max_per_page} items, assuming last page.")
-                break
-
-            # Otherwise, go to next page
-            page += 1
+            # If we got games, return them
+            if games:
+                logger.info(f"Successfully fetched {len(games)} games with pagination={pagination}.")
+                return games
+            else:
+                logger.warning(f"Pagination {pagination} returned 0 games, trying next.")
 
         except Exception as e:
-            logger.error(f"Error fetching page {page}: {e}", exc_info=True)
-            break
+            logger.error(f"Error with pagination={pagination}: {e}", exc_info=True)
+            continue
 
-    logger.info(f"Total games fetched: {len(all_games)}")
-    return all_games
+    # If we exhaust all values, return empty
+    logger.error("All pagination values failed. No games fetched.")
+    return []
 
 
 def insert_new_games(supabase: Client, games):
