@@ -14,36 +14,47 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 GAMEPIX_SID = os.getenv("GAMEPIX_SID", "F5123")
 
+
 def fetch_gamepix_games():
     """
-    Loops through pages 1 to 10 with a pagination limit of 96 games per page
-    to fetch a large, diverse catalog of up to 960 games.
+    Automatically fetches all pages by looping until an empty response.
+    Stops when a page returns fewer than 96 items (or an empty list).
     """
     all_games = {}
-    
-    for page in range(1, 11):
-        url = f"https://feeds.gamepix.com/v2/json?sid={GAMEPIX_SID}&pagination=96&page={page}"
-        logger.info(f"🔄 Pulling batch from page {page}: {url}")
+    page = 1
+    max_per_page = 96
+
+    while True:
+        url = f"https://feeds.gamepix.com/v2/json?sid={GAMEPIX_SID}&pagination={max_per_page}&page={page}"
+        logger.info(f"🔄 Fetching page {page} from {url}")
 
         try:
             resp = requests.get(url, timeout=30)
             if resp.status_code != 200:
-                logger.warning(f"Page {page} returned status {resp.status_code}. Stopping cascade.")
+                logger.warning(f"Page {page} returned status {resp.status_code}. Stopping.")
                 break
 
             data = resp.json()
+
+            # --- Parse response ---
             raw_items = []
-            
             if isinstance(data, list):
                 raw_items = data
             elif isinstance(data, dict):
+                # If the API returns a "games" or "items" key, use that
                 if "games" in data:
                     raw_items = data["games"]
                 elif "items" in data:
                     raw_items = data["items"]
+                else:
+                    # fallback: try to find any list value
+                    for val in data.values():
+                        if isinstance(val, list):
+                            raw_items = val
+                            break
 
             if not raw_items:
-                logger.info(f"Page {page} empty. Ending page parsing sequence.")
+                logger.info(f"Page {page} empty – reached the end.")
                 break
 
             logger.info(f"📋 Found {len(raw_items)} games on page {page}.")
@@ -53,7 +64,7 @@ def fetch_gamepix_games():
                 if not raw_url:
                     continue
 
-                # Seamlessly append your affiliate tracker code
+                # Inject affiliate tracker
                 parsed = urlparse(raw_url)
                 query = parse_qs(parsed.query)
                 query["sid"] = GAMEPIX_SID
@@ -65,7 +76,7 @@ def fetch_gamepix_games():
                 thumbnail = item.get("thumbnailUrl") or item.get("thumbnail") or item.get("image") or ""
                 category = item.get("category") or "Other"
 
-                # Store by key unique ID to automatically drop duplicate entries across pages
+                # Store by ID to deduplicate
                 all_games[game_id] = {
                     "id": game_id,
                     "title": title,
@@ -75,13 +86,20 @@ def fetch_gamepix_games():
                     "updated_at": datetime.utcnow().isoformat()
                 }
 
-            # Gentle pacing interval to respect endpoint servers
+            # If we got fewer than max_per_page, this is the last page
+            if len(raw_items) < max_per_page:
+                logger.info(f"Page {page} returned fewer than {max_per_page} items – assuming last page.")
+                break
+
+            # Move to next page with a small delay
+            page += 1
             time.sleep(0.3)
 
         except Exception as e:
-            logger.error(f"Error parsing index array on page {page}: {e}")
-            continue
+            logger.error(f"Error on page {page}: {e}", exc_info=True)
+            break
 
+    logger.info(f"✅ Total unique games fetched: {len(all_games)}")
     return list(all_games.values())
 
 
@@ -112,4 +130,20 @@ def insert_new_games(supabase: Client, games):
     except Exception as e:
         logger.error(f"Failed bulk transaction execution into Supabase: {e}")
         return 0
-                
+
+
+def main():
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        logger.error("Missing Supabase credentials.")
+        return
+    supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+    games = fetch_gamepix_games()
+    if games:
+        inserted = insert_new_games(supabase, games)
+        logger.info(f"✅ Sync complete! Inserted {inserted} new games.")
+    else:
+        logger.warning("❌ No games fetched.")
+
+
+if __name__ == "__main__":
+    main()
