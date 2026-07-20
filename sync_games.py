@@ -80,12 +80,11 @@ def fetch_gamepix_games():
         return []
 
 def upsert_games(supabase: Client, games):
-    logger.info(f"Upserting {len(games)} formatted rows into Supabase...")
-    for game in games:
-        try:
-            supabase.table("games").upsert(game).execute()
-        except Exception as table_err:
-            logger.error(f"Row insertion error for game {game.get('title')}: {table_err}")
+    logger.info(f"Upserting {len(games)} games in bulk...")
+    try:
+        supabase.table("games").upsert(games).execute()
+    except Exception as e:
+        logger.error(f"Bulk upsert failed: {e}")
 
 def main():
     if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
