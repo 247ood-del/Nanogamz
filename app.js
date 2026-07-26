@@ -8,15 +8,29 @@ const BACKEND_URL = window.BACKEND_URL || 'https://nanogamz.onrender.com';
 
 const CATEGORIES = [
     '🔥 Discover',
-    '🧩 Puzzle',
-    '⚔️ Action',
-    '🧭 Adventure',
-    '🏁 Racing',
-    '🍇 Match',
-    '🎯 Shooting',
-    '🏃‍♂️ Runner',
     '🕹️ Arcade',
-    '⚽ Sports'
+    '🧩 Puzzle',
+    '👶 Kids',
+    '🧭 Adventure',
+    '🎮 Casual',
+    '⚔️ Action',
+    '🚀 Hyper-casual',
+    '⚽ Sports',
+    '🔫 Shooter',
+    '🏃 Platformer',
+    '🐾 Animal',
+    '🍇 Match-3',
+    '⚾ Ball',
+    '🧠 Brain',
+    '♟️ Board',
+    '👾 Monster',
+    '👥 Two-player',
+    '💭 Memory',
+    '🏁 Racing',
+    '🖱️ Clicker',
+    '🏃‍♂️ Runner',
+    '🎯 Skill',
+    '😄 Fun'
 ];
 
 // ------------------------ STATE ------------------------
