@@ -1,4 +1,5 @@
 import os
+import re
 import logging
 import asyncio
 import threading
@@ -63,12 +64,20 @@ async def get_games(
     offset: int = 0
 ):
     try:
-        query = supabase.table("games").select("*").order("id").range(offset, offset + limit - 1)
+        query = supabase.table("games").select("*").range(offset, offset + limit - 1)
+
+        # Normalize category (remove emojis, non-alnum, extra spaces) if not Discover
         if category and category != "🔥 Discover":
-            clean_cat = ''.join(ch for ch in category if ch.isalpha() or ch == ' ').strip()
-            query = query.eq("category", clean_cat)
+            clean_cat = re.sub(r'[^a-zA-Z0-9 ]', '', category).strip().lower()
+            # Use ilike for case‑insensitive matching (allow partial matches)
+            query = query.ilike("category", f"%{clean_cat}%")
+
         if search:
             query = query.ilike("title", f"%{search}%")
+
+        # Random order for all queries
+        query = query.order("random()")
+
         result = query.execute()
         return result.data
     except Exception as e:
