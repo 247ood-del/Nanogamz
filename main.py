@@ -66,7 +66,7 @@ async def get_games(
         query = supabase.table("games").select("*").order("id").range(offset, offset + limit - 1)
         if category and category != "🔥 Discover":
             # Remove emojis and keep only alphabetic characters and spaces
-            clean_cat = ''.join(ch for ch in category if ch.isalpha() or ch == ' ').strip()
+            clean_cat = ''.join(ch for ch in category if ch.isalnum() or ch == ' ' or ch == '-').strip()
             if clean_cat:
                 # Use ilike for case‑insensitive match
                 query = query.ilike("category", clean_cat)
