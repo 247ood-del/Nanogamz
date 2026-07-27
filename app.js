@@ -355,8 +355,15 @@ async function loadGames(reset = false) {
     }
 }
 
-// ------------------------ COLLAPSE AD ON SCROLL ------------------------
+// ------------------------ INFINITE SCROLL (unchanged) ------------------------
 const gridContainer = document.getElementById('gameGrid');
+gridContainer.addEventListener('scroll', () => {
+    if (gridContainer.scrollTop + gridContainer.clientHeight >= gridContainer.scrollHeight - 100) {
+        if (!state.loading && state.hasMore) loadGames(false);
+    }
+});
+
+// ------------------------ COLLAPSE AD ON SCROLL (NEW) ------------------------
 const SCROLL_THRESHOLD = 20; // pixels before hiding
 
 gridContainer.addEventListener('scroll', () => {
@@ -365,14 +372,6 @@ gridContainer.addEventListener('scroll', () => {
         document.body.classList.add('ad-hidden');
     } else {
         document.body.classList.remove('ad-hidden');
-    }
-});
-
-// ------------------------ INFINITE SCROLL (unchanged) ------------------------
-const gridContainer = document.getElementById('gameGrid');
-gridContainer.addEventListener('scroll', () => {
-    if (gridContainer.scrollTop + gridContainer.clientHeight >= gridContainer.scrollHeight - 100) {
-        if (!state.loading && state.hasMore) loadGames(false);
     }
 });
 
