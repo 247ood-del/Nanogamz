@@ -587,3 +587,24 @@ body.search-open .game-grid {
 .close-menu-btn:hover {
     opacity: 1;
     }
+/* ========== COLLAPSIBLE AD HEADER ========== */
+.ad-carousel {
+    transition: transform 0.3s cubic-bezier(0.2, 0.9, 0.4, 1.1);
+}
+.cat-bar {
+    transition: top 0.3s cubic-bezier(0.2, 0.9, 0.4, 1.1);
+}
+.game-grid {
+    transition: top 0.3s cubic-bezier(0.2, 0.9, 0.4, 1.1);
+}
+
+/* When ad is hidden (user scrolled down) */
+body.ad-hidden .ad-carousel {
+    transform: translateY(-160px); /* slide up and out */
+}
+body.ad-hidden .cat-bar {
+    top: 56px; /* just below the top bar */
+}
+body.ad-hidden .game-grid {
+    top: 104px; /* 56px top bar + 48px category bar */
+}
