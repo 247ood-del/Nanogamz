@@ -83,8 +83,6 @@ if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
     }
 }
 
-// (No user reporting to Supabase needed – points removed)
-
 // ------------------------ DOM REFS ------------------------
 const grid = document.getElementById('gridContainer');
 const catBar = document.getElementById('catBar');
@@ -98,6 +96,71 @@ const searchToggle = document.getElementById('searchToggle');
 const refreshBtn = document.getElementById('refreshBtn');
 const adWrapper = document.getElementById('adWrapper');
 const closeMenuBtn = document.getElementById('closeMenuBtn');
+
+// ------------------------ SEARCH PANEL (new) ------------------------
+const searchPanel = document.getElementById('searchPanel');
+const searchInput = document.getElementById('searchInput');
+const searchSubmitBtn = document.getElementById('searchSubmitBtn');
+let searchOpen = false;
+
+function openSearch() {
+    if (searchOpen) return;
+    searchPanel.classList.add('open');
+    document.body.classList.add('search-open');
+    searchOpen = true;
+    searchToggle.textContent = '✕'; // change icon to close
+    setTimeout(() => searchInput.focus(), 100);
+}
+
+function closeSearch() {
+    if (!searchOpen) return;
+    searchPanel.classList.remove('open');
+    document.body.classList.remove('search-open');
+    searchOpen = false;
+    searchToggle.textContent = '🔍';
+    searchInput.value = '';
+}
+
+function toggleSearch() {
+    if (searchOpen) {
+        closeSearch();
+    } else {
+        openSearch();
+    }
+}
+
+function performSearch() {
+    const query = searchInput.value.trim();
+    closeSearch();
+    if (query === '') {
+        // If empty, reset to current category
+        state.searchQuery = '';
+    } else {
+        state.searchQuery = query;
+    }
+    state.offset = 0;
+    state.hasMore = true;
+    state.games = [];
+    generateNewSeed(); // reshuffle for new search
+    loadGames(true);
+}
+
+// Event listeners for search
+searchToggle.addEventListener('click', toggleSearch);
+searchSubmitBtn.addEventListener('click', performSearch);
+searchInput.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        performSearch();
+    }
+});
+
+// Close search on outside click (click on the page background)
+document.addEventListener('click', (e) => {
+    if (searchOpen && !searchPanel.contains(e.target) && e.target !== searchToggle) {
+        closeSearch();
+    }
+});
 
 // ------------------------ THEME ENGINE (unchanged) ------------------------
 function applyTheme(theme) {
@@ -309,30 +372,6 @@ refreshBtn.addEventListener('click', () => {
     loadGames(true);
 });
 
-// ------------------------ SEARCH (unchanged) ------------------------
-let searchOpen = false;
-searchToggle.addEventListener('click', () => {
-    if (!searchOpen) {
-        const query = prompt('Search games:', state.searchQuery);
-        if (query !== null) {
-            state.searchQuery = query.trim();
-            state.offset = 0;
-            state.hasMore = true;
-            state.games = [];
-            generateNewSeed(); // Force reshuffle on search!
-            loadGames(true);
-        }
-    } else {
-        state.searchQuery = '';
-        state.offset = 0;
-        state.hasMore = true;
-        state.games = [];
-        generateNewSeed(); // Force reshuffle on search clear!
-        loadGames(true);
-    }
-    searchOpen = !searchOpen;
-});
-
 // ------------------------ GAME MODAL (unchanged) ------------------------
 function openGame(game) {
     gameIframe.src = game.playable_url;
@@ -383,7 +422,7 @@ function renderRecentGames() {
 }
 renderRecentGames();
 
-// ------------------------ SIDE MENU (with close button) ------------------------
+// ------------------------ SIDE MENU (unchanged) ------------------------
 function toggleMenu() {
     const isOpen = menuPanel.classList.contains('open');
     menuPanel.classList.toggle('open');
@@ -393,7 +432,6 @@ function toggleMenu() {
 menuToggle.addEventListener('click', toggleMenu);
 menuOverlay.addEventListener('click', toggleMenu);
 
-// Close menu button inside the panel
 closeMenuBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     if (menuPanel.classList.contains('open')) {
@@ -401,7 +439,7 @@ closeMenuBtn.addEventListener('click', (e) => {
     }
 });
 
-// ==================== SHARE BOT (exact copy of VidVids: copy + alert) ====================
+// ==================== SHARE BOT ====================
 document.getElementById('shareLink').addEventListener('click', async (e) => {
     e.preventDefault();
     const shareText = '🎮 Play instant games on Nanogamz – your pocket gaming hub!';
@@ -412,7 +450,7 @@ document.getElementById('shareLink').addEventListener('click', async (e) => {
     } catch {
         alert('Unable to copy. Please copy the link manually: ' + botLink);
     }
-    toggleMenu(); // close menu after sharing
+    toggleMenu();
 });
 
 // ==================== COPY USER ID ====================
@@ -448,23 +486,20 @@ function closePrivacy() {
     document.getElementById('privacyModal').classList.remove('active');
 }
 
-// Replace alert with modals
 document.getElementById('copyrightLink').addEventListener('click', (e) => {
     e.preventDefault();
-    toggleMenu();   // close the side menu
+    toggleMenu();
     openCopyright();
 });
 document.getElementById('privacyLink').addEventListener('click', (e) => {
     e.preventDefault();
-    toggleMenu();   // close the side menu
+    toggleMenu();
     openPrivacy();
 });
 
-// Close modals
 document.getElementById('copyrightClose').addEventListener('click', closeCopyright);
 document.getElementById('privacyClose').addEventListener('click', closePrivacy);
 
-// Close modals on overlay click
 document.querySelectorAll('.modal-overlay').forEach(overlay => {
     overlay.addEventListener('click', (e) => {
         if (e.target === overlay) {
@@ -473,7 +508,6 @@ document.querySelectorAll('.modal-overlay').forEach(overlay => {
     });
 });
 
-// Support link remains unchanged
 document.getElementById('supportLink').addEventListener('click', (e) => {
     e.preventDefault();
     tg.openTelegramLink('https://t.me/ojareridominion');
