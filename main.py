@@ -2,7 +2,7 @@ import os
 import logging
 import asyncio
 import threading
-import random  # <-- NEW import
+import random
 from fastapi import FastAPI, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from aiogram import Bot, Dispatcher, types, F
@@ -62,7 +62,7 @@ async def get_games(
     search: Optional[str] = Query(None),
     limit: int = 20,
     offset: int = 0,
-    seed: Optional[int] = Query(None)  # <-- NEW seed parameter
+    seed: Optional[int] = Query(None)
 ):
     try:
         # 1. Fetch matching games (without ordering by ID)
@@ -71,15 +71,15 @@ async def get_games(
             # Remove emojis and keep only alphabetic characters and spaces
             clean_cat = ''.join(ch for ch in category if ch.isalnum() or ch == ' ' or ch == '-').strip()
             if clean_cat:
-                # Use ilike for case‑insensitive match
                 query = query.ilike("category", clean_cat)
         if search:
             query = query.ilike("title", f"%{search}%")
         result = query.execute()
         games = result.data or []
 
-        # 2. Randomize results reliably using the provided seed (or fallback)
-        r = random.Random(seed) if seed is not None else random.Random()
+        # 2. Combine seed with category to create a deterministic but action‑dependent shuffle
+        effective_seed = (seed or 0) + hash(category or "")
+        r = random.Random(effective_seed)
         r.shuffle(games)
 
         # 3. Paginate the shuffled list
