@@ -46,7 +46,10 @@
             <div class="avatar"><img id="userAvatar" src="assets/default-avatar.png" alt="avatar" /></div>
             <div>
                 <div class="name" id="userName">Player</div>
-                <div class="id" id="userId">ID: -</div>
+                <div style="display:flex; align-items:center; gap:6px;">
+                    <span class="id" id="userId">ID: -</span>
+                    <button id="copyIdBtn" class="copy-btn" title="Copy ID">📋</button>
+                </div>
             </div>
         </div>
         <div>
@@ -69,6 +72,35 @@
             <button class="seg-option" data-mode="text">Text</button>
         </div>
         <div class="color-palette" id="colorPalette"></div>
+    </div>
+</div>
+
+<!-- Copyright Modal -->
+<div class="modal-overlay" id="copyrightModal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>📄 Copyright</h2>
+            <button class="modal-close" id="copyrightClose">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p>All games displayed in Nanogamz are provided by <strong>GamePix</strong> and are the property of their respective owners.</p>
+            <p>Nanogamz does not host or modify any game content. If you are a copyright holder and believe your rights have been infringed, please contact us via <a href="https://t.me/ojareridominion" target="_blank">@ojareridominion</a>.</p>
+        </div>
+    </div>
+</div>
+
+<!-- Privacy Modal -->
+<div class="modal-overlay" id="privacyModal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>🔒 Privacy Policy</h2>
+            <button class="modal-close" id="privacyClose">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p>Nanogamz collects only your Telegram ID and username to provide personalized features (e.g., recent games, referral tracking).</p>
+            <p>We do not share your data with third parties. All data is stored securely in our Supabase database.</p>
+            <p>You may request deletion of your data at any time by contacting support.</p>
+        </div>
     </div>
 </div>
 
