@@ -461,3 +461,30 @@ body {
 .copy-btn:hover {
     opacity: 1;
 }
+/* Menu Header with Close Button */
+.menu-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    margin-bottom: 4px;
+}
+.menu-header .menu-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text);
+}
+.close-menu-btn {
+    background: none;
+    border: none;
+    color: var(--text);
+    font-size: 24px;
+    cursor: pointer;
+    opacity: 0.7;
+    transition: 0.2s;
+    padding: 0 4px;
+}
+.close-menu-btn:hover {
+    opacity: 1;
+}
