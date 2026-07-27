@@ -435,7 +435,7 @@ function copyUserId() {
         navigator.clipboard.writeText(userId).then(() => {
             const btn = document.getElementById('copyIdBtn');
             const original = btn.textContent;
-            btn.textContent = '✅';
+            btn.textContent = '✅copied';
             setTimeout(() => { btn.textContent = original; }, 1500);
         }).catch(() => {
             alert('Failed to copy ID.');
