@@ -326,6 +326,8 @@ async function loadGames(reset = false) {
             `;
             grid.appendChild(skel);
         }
+        // Reset ad offset when loading new content
+        resetAdOffset();
     }
 
     try {
@@ -354,29 +356,46 @@ gridContainer.addEventListener('scroll', () => {
     }
 });
 
-// ==================== PARALLAX AD COLLAPSE (SCROLL-DRIVEN) ====================
-let ticking = false;
-const AD_HEIGHT = 160; // must match CSS height of .ad-carousel
+// ==================== PARALLAX AD COLLAPSE (DELTA‑BASED) ====================
+let lastScrollTop = 0;
+let adOffset = 0;
+const AD_HEIGHT = 160;
 const TOP_BAR_HEIGHT = 56;
 const CAT_BAR_HEIGHT = 48;
 
+function resetAdOffset() {
+    adOffset = 0;
+    lastScrollTop = 0;
+    updateAdPosition(0);
+}
+
+function updateAdPosition(offset) {
+    adCarousel.style.transform = `translateY(-${offset}px)`;
+    catBar.style.top = `${TOP_BAR_HEIGHT + AD_HEIGHT - offset}px`;
+    gridContainer.style.top = `${TOP_BAR_HEIGHT + AD_HEIGHT + CAT_BAR_HEIGHT - offset}px`;
+}
+
+// Listen to scroll with delta
+let ticking = false;
 gridContainer.addEventListener('scroll', () => {
     if (!ticking) {
         window.requestAnimationFrame(() => {
             const scrollTop = gridContainer.scrollTop;
-            // clamp offset between 0 and AD_HEIGHT
-            const offset = Math.min(scrollTop, AD_HEIGHT);
-            // Move ad up by offset
-            adCarousel.style.transform = `translateY(-${offset}px)`;
-            // Move category bar up (starts at 56+160 = 216px)
-            catBar.style.top = `${TOP_BAR_HEIGHT + AD_HEIGHT - offset}px`;
-            // Move game grid up (starts at 56+160+48 = 264px)
-            gridContainer.style.top = `${TOP_BAR_HEIGHT + AD_HEIGHT + CAT_BAR_HEIGHT - offset}px`;
+            const delta = scrollTop - lastScrollTop;
+            lastScrollTop = scrollTop;
+
+            // Update adOffset based on delta, clamp between 0 and AD_HEIGHT
+            adOffset = Math.min(Math.max(adOffset + delta, 0), AD_HEIGHT);
+
+            updateAdPosition(adOffset);
             ticking = false;
         });
         ticking = true;
     }
 });
+
+// Ensure initial position is correct
+resetAdOffset();
 
 // ------------------------ PULL-TO-REFRESH ------------------------
 refreshBtn.addEventListener('click', () => {
