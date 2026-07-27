@@ -40,6 +40,12 @@
 <!-- Side Menu -->
 <div class="menu-overlay" id="menuOverlay"></div>
 <div class="menu-panel" id="menuPanel">
+    <!-- Close Menu Button (like VidVids) -->
+    <div class="menu-header">
+        <span class="menu-title">Nanogamz</span>
+        <button class="close-menu-btn" id="closeMenuBtn">✕</button>
+    </div>
+
     <!-- User Card -->
     <div class="user-card" id="userCard">
         <div class="top">
@@ -48,7 +54,7 @@
                 <div class="name" id="userName">Player</div>
                 <div style="display:flex; align-items:center; gap:6px;">
                     <span class="id" id="userId">ID: -</span>
-                    <button id="copyIdBtn" class="copy-btn" title="Copy ID">📋copy</button>
+                    <button id="copyIdBtn" class="copy-btn" title="Copy ID">📋</button>
                 </div>
             </div>
         </div>
@@ -58,11 +64,11 @@
         </div>
     </div>
 
-    <a class="menu-link" id="shareLink" onclick="shareBot()">🔗 Share App</a>
+    <a class="menu-link" id="shareLink">🔗 Share Bot with Friends</a>
     <a class="menu-link" href="https://t.me/nanogamz">📢 Channel</a>
     <a class="menu-link" id="supportLink">💬 Support</a>
-    <a class="menu-link" id="copyrightLink">⚖️ Copyright</a>
-    <a class="menu-link" id="privacyLink">🔒 Privacy</a>
+    <a class="menu-link" id="copyrightLink">⚖️ Copyright Policy</a>
+    <a class="menu-link" id="privacyLink">🔒 Privacy Policy</a>
 
     <div class="theme-section">
         <div style="font-size:13px; opacity:0.6; margin-bottom:4px;">CUSTOM THEME</div>
@@ -79,12 +85,12 @@
 <div class="modal-overlay" id="copyrightModal">
     <div class="modal-content">
         <div class="modal-header">
-            <h2>📄 Copyright</h2>
+            <h2>📄 Copyright Policy</h2>
             <button class="modal-close" id="copyrightClose">&times;</button>
         </div>
         <div class="modal-body">
             <p>All games displayed in Nanogamz are provided by <strong>GamePix</strong> and are the property of their respective owners.</p>
-            <p>Nanogamz does not host or modify any game content. If you are a copyright holder and believe your rights have been infringed, please contact us via <a href="https://t.me/ojareridominion" target="_blank">@ojareridominion</a>.</p>
+            <p>Nanogamz does not host or modify any game content. If you are a copyright holder and believe your rights have been infringed, please contact us via <a href="https://t.me/ojareridominion" target="_blank">support</a>.</p>
         </div>
     </div>
 </div>
@@ -99,7 +105,7 @@
         <div class="modal-body">
             <p>Nanogamz collects only your Telegram ID and username to provide personalized features (e.g., recent games, referral tracking).</p>
             <p>We do not share your data with third parties. All data is stored securely in our Supabase database.</p>
-            <p>You may request deletion of your data at any time by contacting support.</p>
+            <p>You may request deletion of your data at any time by contacting <a href="https://t.me/ojareridominion" target="_blank">support</a>.</p>
         </div>
     </div>
 </div>
