@@ -355,6 +355,19 @@ async function loadGames(reset = false) {
     }
 }
 
+// ------------------------ COLLAPSE AD ON SCROLL ------------------------
+const gridContainer = document.getElementById('gameGrid');
+const SCROLL_THRESHOLD = 20; // pixels before hiding
+
+gridContainer.addEventListener('scroll', () => {
+    const scrollTop = gridContainer.scrollTop;
+    if (scrollTop > SCROLL_THRESHOLD) {
+        document.body.classList.add('ad-hidden');
+    } else {
+        document.body.classList.remove('ad-hidden');
+    }
+});
+
 // ------------------------ INFINITE SCROLL (unchanged) ------------------------
 const gridContainer = document.getElementById('gameGrid');
 gridContainer.addEventListener('scroll', () => {
