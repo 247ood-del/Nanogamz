@@ -392,32 +392,104 @@ function toggleMenu() {
 menuToggle.addEventListener('click', toggleMenu);
 menuOverlay.addEventListener('click', toggleMenu);
 
+// ==================== UPDATED SHARE BOT ====================
 async function shareBot() {
-    const shareData = {
-        title: 'Nanogamz',
-        text: '‎Your pocket player for instant gaming.',
-        url: 'https://t.me/Nanogamz_bot'
-    };
+    const botLink = 'https://t.me/Nanogamz_bot';
+    const shareText = '🎮 Play instant games on Nanogamz – your pocket gaming hub!';
+    const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(botLink)}&text=${encodeURIComponent(shareText)}`;
+
+    // Try Telegram native share first
+    if (window.Telegram?.WebApp?.openTelegramLink) {
+        window.Telegram.WebApp.openTelegramLink(shareUrl);
+        return;
+    }
+
+    // Fallback: Web Share API
     try {
-        if (navigator.share) await navigator.share(shareData);
-        else {
-            await navigator.clipboard.writeText(`${shareData.text} ${shareData.url}`);
-            alert('Link & Text copied to clipboard!');
+        if (navigator.share) {
+            await navigator.share({
+                title: 'Nanogamz',
+                text: shareText,
+                url: botLink,
+            });
+            return;
         }
-    } catch (err) { console.log('Error sharing:', err); }
+    } catch {}
+
+    // Final fallback: copy to clipboard
+    try {
+        await navigator.clipboard.writeText(`${shareText} ${botLink}`);
+        alert('✅ Link & text copied to clipboard!');
+    } catch {
+        alert('Unable to share. Please copy the link manually: ' + botLink);
+    }
 }
+// Make shareBot globally accessible for inline onclick
+window.shareBot = shareBot;
+
+// ==================== COPY USER ID ====================
+function copyUserId() {
+    const userIdEl = document.getElementById('userId');
+    const userId = userIdEl.textContent.replace('ID: ', '').trim();
+    if (userId && userId !== '-') {
+        navigator.clipboard.writeText(userId).then(() => {
+            const btn = document.getElementById('copyIdBtn');
+            const original = btn.textContent;
+            btn.textContent = '✅';
+            setTimeout(() => { btn.textContent = original; }, 1500);
+        }).catch(() => {
+            alert('Failed to copy ID.');
+        });
+    }
+}
+
+document.getElementById('copyIdBtn').addEventListener('click', copyUserId);
+
+// ==================== COPYRIGHT & PRIVACY MODALS ====================
+function openCopyright() {
+    document.getElementById('copyrightModal').classList.add('active');
+}
+function closeCopyright() {
+    document.getElementById('copyrightModal').classList.remove('active');
+}
+
+function openPrivacy() {
+    document.getElementById('privacyModal').classList.add('active');
+}
+function closePrivacy() {
+    document.getElementById('privacyModal').classList.remove('active');
+}
+
+// Replace alert with modals
+document.getElementById('copyrightLink').addEventListener('click', (e) => {
+    e.preventDefault();
+    toggleMenu();   // close the side menu
+    openCopyright();
+});
+document.getElementById('privacyLink').addEventListener('click', (e) => {
+    e.preventDefault();
+    toggleMenu();   // close the side menu
+    openPrivacy();
+});
+
+// Close modals
+document.getElementById('copyrightClose').addEventListener('click', closeCopyright);
+document.getElementById('privacyClose').addEventListener('click', closePrivacy);
+
+// Close modals on overlay click
+document.querySelectorAll('.modal-overlay').forEach(overlay => {
+    overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) {
+            overlay.classList.remove('active');
+        }
+    });
+});
+
+// Support link remains unchanged
 document.getElementById('supportLink').addEventListener('click', (e) => {
     e.preventDefault();
     tg.openTelegramLink('https://t.me/ojareridominion');
     toggleMenu();
-});
-document.getElementById('copyrightLink').addEventListener('click', (e) => {
-    e.preventDefault();
-    alert('Copyright Policy: All games are provided by GamePix and are property of their respective owners.');
-});
-document.getElementById('privacyLink').addEventListener('click', (e) => {
-    e.preventDefault();
-    alert('Privacy Policy: We only store your Telegram ID and username to enable referrals.');
 });
 
 // ------------------------ INITIAL LOAD ------------------------
