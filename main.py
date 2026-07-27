@@ -2,7 +2,7 @@ import os
 import logging
 import asyncio
 import threading
-import random  # <-- added for seeding
+import random  # <-- NEW import
 from fastapi import FastAPI, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from aiogram import Bot, Dispatcher, types, F
@@ -62,30 +62,30 @@ async def get_games(
     search: Optional[str] = Query(None),
     limit: int = 20,
     offset: int = 0,
-    seed: Optional[int] = Query(None)   # new seed parameter
+    seed: Optional[int] = Query(None)  # <-- NEW seed parameter
 ):
     try:
+        # 1. Fetch matching games (without ordering by ID)
         query = supabase.table("games").select("*")
         if category and category != "🔥 Discover":
             # Remove emojis and keep only alphabetic characters and spaces
             clean_cat = ''.join(ch for ch in category if ch.isalnum() or ch == ' ' or ch == '-').strip()
             if clean_cat:
+                # Use ilike for case‑insensitive match
                 query = query.ilike("category", clean_cat)
         if search:
             query = query.ilike("title", f"%{search}%")
-
-        # Fetch all matching games (no pagination yet)
         result = query.execute()
-        games = result.data
+        games = result.data or []
 
-        # Shuffle deterministically if seed is provided
-        if seed is not None:
-            rng = random.Random(seed)
-            rng.shuffle(games)
+        # 2. Randomize results reliably using the provided seed (or fallback)
+        r = random.Random(seed) if seed is not None else random.Random()
+        r.shuffle(games)
 
-        # Apply pagination
-        paginated = games[offset:offset + limit]
-        return paginated
+        # 3. Paginate the shuffled list
+        paginated_games = games[offset : offset + limit]
+        return paginated_games
+
     except Exception as e:
         return {"error": str(e)}, 500
 
