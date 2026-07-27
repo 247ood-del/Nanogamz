@@ -50,7 +50,8 @@ const state = {
         text: '#ffffff',
         bar: '#1a1a1a',
         accent: '#6c5ce7'
-    }
+    },
+    seed: Math.floor(Math.random() * 1_000_000_000)   // <-- new session seed
 };
 
 // ------------------------ TELEGRAM WEBAPP ------------------------
@@ -210,7 +211,7 @@ renderCategories();
 
 // ------------------------ FETCH GAMES FROM BACKEND ------------------------
 async function fetchGames(category, offset, limit, search = '') {
-    let url = `${BACKEND_URL}/games?limit=${limit}&offset=${offset}`;
+    let url = `${BACKEND_URL}/games?limit=${limit}&offset=${offset}&seed=${state.seed}`;   // seed added
     if (category && category !== '🔥 Discover') {
         url += `&category=${encodeURIComponent(category)}`;
     }
