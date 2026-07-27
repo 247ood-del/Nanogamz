@@ -97,6 +97,7 @@ const menuOverlay = document.getElementById('menuOverlay');
 const searchToggle = document.getElementById('searchToggle');
 const refreshBtn = document.getElementById('refreshBtn');
 const adWrapper = document.getElementById('adWrapper');
+const closeMenuBtn = document.getElementById('closeMenuBtn');
 
 // ------------------------ THEME ENGINE (unchanged) ------------------------
 function applyTheme(theme) {
@@ -382,7 +383,7 @@ function renderRecentGames() {
 }
 renderRecentGames();
 
-// ------------------------ SIDE MENU (unchanged) ------------------------
+// ------------------------ SIDE MENU (with close button) ------------------------
 function toggleMenu() {
     const isOpen = menuPanel.classList.contains('open');
     menuPanel.classList.toggle('open');
@@ -392,40 +393,27 @@ function toggleMenu() {
 menuToggle.addEventListener('click', toggleMenu);
 menuOverlay.addEventListener('click', toggleMenu);
 
-// ==================== UPDATED SHARE BOT ====================
-async function shareBot() {
-    const botLink = 'https://t.me/Nanogamz_bot';
-    const shareText = '🎮 Play instant games on Nanogamz – your pocket gaming hub!';
-    const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(botLink)}&text=${encodeURIComponent(shareText)}`;
-
-    // Try Telegram native share first
-    if (window.Telegram?.WebApp?.openTelegramLink) {
-        window.Telegram.WebApp.openTelegramLink(shareUrl);
-        return;
+// Close menu button inside the panel
+closeMenuBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (menuPanel.classList.contains('open')) {
+        toggleMenu();
     }
+});
 
-    // Fallback: Web Share API
-    try {
-        if (navigator.share) {
-            await navigator.share({
-                title: 'Nanogamz',
-                text: shareText,
-                url: botLink,
-            });
-            return;
-        }
-    } catch {}
-
-    // Final fallback: copy to clipboard
+// ==================== SHARE BOT (exact copy of VidVids: copy + alert) ====================
+document.getElementById('shareLink').addEventListener('click', async (e) => {
+    e.preventDefault();
+    const shareText = '🎮 Play instant games on Nanogamz – your pocket gaming hub!';
+    const botLink = 'https://t.me/Nanogamz_bot';
     try {
         await navigator.clipboard.writeText(`${shareText} ${botLink}`);
-        alert('✅ Link & text copied to clipboard!');
+        alert('✅ Link & Text copied to clipboard!');
     } catch {
-        alert('Unable to share. Please copy the link manually: ' + botLink);
+        alert('Unable to copy. Please copy the link manually: ' + botLink);
     }
-}
-// Make shareBot globally accessible for inline onclick
-window.shareBot = shareBot;
+    toggleMenu(); // close menu after sharing
+});
 
 // ==================== COPY USER ID ====================
 function copyUserId() {
@@ -435,7 +423,7 @@ function copyUserId() {
         navigator.clipboard.writeText(userId).then(() => {
             const btn = document.getElementById('copyIdBtn');
             const original = btn.textContent;
-            btn.textContent = '✅copied';
+            btn.textContent = '✅';
             setTimeout(() => { btn.textContent = original; }, 1500);
         }).catch(() => {
             alert('Failed to copy ID.');
