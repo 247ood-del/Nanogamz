@@ -2,6 +2,7 @@ import os
 import logging
 import asyncio
 import threading
+import random  # <-- added for seeding
 from fastapi import FastAPI, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from aiogram import Bot, Dispatcher, types, F
@@ -60,20 +61,31 @@ async def get_games(
     category: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
     limit: int = 20,
-    offset: int = 0
+    offset: int = 0,
+    seed: Optional[int] = Query(None)   # new seed parameter
 ):
     try:
-        query = supabase.table("games").select("*").order("id").range(offset, offset + limit - 1)
+        query = supabase.table("games").select("*")
         if category and category != "🔥 Discover":
             # Remove emojis and keep only alphabetic characters and spaces
             clean_cat = ''.join(ch for ch in category if ch.isalnum() or ch == ' ' or ch == '-').strip()
             if clean_cat:
-                # Use ilike for case‑insensitive match
                 query = query.ilike("category", clean_cat)
         if search:
             query = query.ilike("title", f"%{search}%")
+
+        # Fetch all matching games (no pagination yet)
         result = query.execute()
-        return result.data
+        games = result.data
+
+        # Shuffle deterministically if seed is provided
+        if seed is not None:
+            rng = random.Random(seed)
+            rng.shuffle(games)
+
+        # Apply pagination
+        paginated = games[offset:offset + limit]
+        return paginated
     except Exception as e:
         return {"error": str(e)}, 500
 
