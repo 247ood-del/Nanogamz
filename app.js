@@ -363,6 +363,9 @@ const AD_HEIGHT = 160;
 const TOP_BAR_HEIGHT = 56;
 const CAT_BAR_HEIGHT = 48;
 
+// 🔥 NEW: Adjust this to control speed. 0.7 = 70% of scroll speed.
+const SCROLL_RATIO = 0.7; 
+
 function resetAdOffset() {
     adOffset = 0;
     lastScrollTop = 0;
@@ -384,8 +387,8 @@ gridContainer.addEventListener('scroll', () => {
             const delta = scrollTop - lastScrollTop;
             lastScrollTop = scrollTop;
 
-            // Update adOffset based on delta, clamp between 0 and AD_HEIGHT
-            adOffset = Math.min(Math.max(adOffset + delta, 0), AD_HEIGHT);
+            // 👇 MULTIPLY the delta by the ratio here
+            adOffset = Math.min(Math.max(adOffset + (delta * SCROLL_RATIO), 0), AD_HEIGHT);
 
             updateAdPosition(adOffset);
             ticking = false;
