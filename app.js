@@ -42,6 +42,7 @@ const state = {
     loading: false,
     hasMore: true,
     searchQuery: '',
+    sessionSeed: Date.now(), // <-- NEW unique seed for this session
     lastPlayed: JSON.parse(localStorage.getItem('nanogamz_recent') || '[]'),
     swiperAd: null,
     user: null,
@@ -50,8 +51,7 @@ const state = {
         text: '#ffffff',
         bar: '#1a1a1a',
         accent: '#6c5ce7'
-    },
-    seed: Math.floor(Math.random() * 1_000_000_000)   // <-- new session seed
+    }
 };
 
 // ------------------------ TELEGRAM WEBAPP ------------------------
@@ -202,6 +202,7 @@ function renderCategories() {
             state.offset = 0;
             state.hasMore = true;
             state.games = [];
+            state.sessionSeed = Date.now(); // <-- NEW seed for new category
             renderCategories();
             loadGames(true);
         });
@@ -210,13 +211,16 @@ function renderCategories() {
 renderCategories();
 
 // ------------------------ FETCH GAMES FROM BACKEND ------------------------
-async function fetchGames(category, offset, limit, search = '') {
-    let url = `${BACKEND_URL}/games?limit=${limit}&offset=${offset}&seed=${state.seed}`;   // seed added
+async function fetchGames(category, offset, limit, search = '', seed = null) { // <-- added seed param
+    let url = `${BACKEND_URL}/games?limit=${limit}&offset=${offset}`;
     if (category && category !== '🔥 Discover') {
         url += `&category=${encodeURIComponent(category)}`;
     }
     if (search) {
         url += `&search=${encodeURIComponent(search)}`;
+    }
+    if (seed) {
+        url += `&seed=${seed}`; // <-- pass seed to backend
     }
     const resp = await fetch(url);
     if (!resp.ok) throw new Error('Network error');
@@ -268,7 +272,8 @@ async function loadGames(reset = false) {
             state.currentCategory,
             state.offset,
             state.limit,
-            state.searchQuery
+            state.searchQuery,
+            state.sessionSeed // <-- pass session seed
         );
         if (data.length < state.limit) state.hasMore = false;
         state.games = reset ? data : [...state.games, ...data];
@@ -294,6 +299,7 @@ refreshBtn.addEventListener('click', () => {
     state.offset = 0;
     state.hasMore = true;
     state.games = [];
+    state.sessionSeed = Date.now(); // <-- NEW seed on refresh
     loadGames(true);
 });
 
@@ -307,6 +313,7 @@ searchToggle.addEventListener('click', () => {
             state.offset = 0;
             state.hasMore = true;
             state.games = [];
+            state.sessionSeed = Date.now(); // <-- NEW seed on search
             loadGames(true);
         }
     } else {
@@ -314,6 +321,7 @@ searchToggle.addEventListener('click', () => {
         state.offset = 0;
         state.hasMore = true;
         state.games = [];
+        state.sessionSeed = Date.now(); // <-- NEW seed when clearing search
         loadGames(true);
     }
     searchOpen = !searchOpen;
