@@ -392,13 +392,20 @@ function toggleMenu() {
 menuToggle.addEventListener('click', toggleMenu);
 menuOverlay.addEventListener('click', toggleMenu);
 
-document.getElementById('shareLink').addEventListener('click', (e) => {
-    e.preventDefault();
-    const ref = state.user ? state.user.id : '';
-    const link = `https://t.me/Nanogamz_bot`;
-    tg.openTelegramLink(link);
-    toggleMenu();
-});
+async function shareBot() {
+    const shareData = {
+        title: 'Nanogamz',
+        text: '‎Your pocket player for instant gaming.',
+        url: 'https://t.me/Nanogamz_bot'
+    };
+    try {
+        if (navigator.share) await navigator.share(shareData);
+        else {
+            await navigator.clipboard.writeText(`${shareData.text} ${shareData.url}`);
+            alert('Link & Text copied to clipboard!');
+        }
+    } catch (err) { console.log('Error sharing:', err); }
+}
 document.getElementById('supportLink').addEventListener('click', (e) => {
     e.preventDefault();
     tg.openTelegramLink('https://t.me/ojareridominion');
