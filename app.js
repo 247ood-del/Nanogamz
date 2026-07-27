@@ -42,7 +42,7 @@ const state = {
     loading: false,
     hasMore: true,
     searchQuery: '',
-    sessionSeed: Date.now(), // initial seed for first load
+    sessionSeed: Date.now(),
     lastPlayed: JSON.parse(localStorage.getItem('nanogamz_recent') || '[]'),
     swiperAd: null,
     user: null,
@@ -96,8 +96,10 @@ const searchToggle = document.getElementById('searchToggle');
 const refreshBtn = document.getElementById('refreshBtn');
 const adWrapper = document.getElementById('adWrapper');
 const closeMenuBtn = document.getElementById('closeMenuBtn');
+const adCarousel = document.querySelector('.ad-carousel');
+const gridContainer = document.getElementById('gameGrid');
 
-// ------------------------ SEARCH PANEL (new) ------------------------
+// ------------------------ SEARCH PANEL ------------------------
 const searchPanel = document.getElementById('searchPanel');
 const searchInput = document.getElementById('searchInput');
 const searchSubmitBtn = document.getElementById('searchSubmitBtn');
@@ -108,7 +110,7 @@ function openSearch() {
     searchPanel.classList.add('open');
     document.body.classList.add('search-open');
     searchOpen = true;
-    searchToggle.textContent = '✕'; // change icon to close
+    searchToggle.textContent = '✕';
     setTimeout(() => searchInput.focus(), 100);
 }
 
@@ -122,30 +124,21 @@ function closeSearch() {
 }
 
 function toggleSearch() {
-    if (searchOpen) {
-        closeSearch();
-    } else {
-        openSearch();
-    }
+    if (searchOpen) closeSearch();
+    else openSearch();
 }
 
 function performSearch() {
     const query = searchInput.value.trim();
     closeSearch();
-    if (query === '') {
-        // If empty, reset to current category
-        state.searchQuery = '';
-    } else {
-        state.searchQuery = query;
-    }
+    state.searchQuery = query;
     state.offset = 0;
     state.hasMore = true;
     state.games = [];
-    generateNewSeed(); // reshuffle for new search
+    generateNewSeed();
     loadGames(true);
 }
 
-// Event listeners for search
 searchToggle.addEventListener('click', toggleSearch);
 searchSubmitBtn.addEventListener('click', performSearch);
 searchInput.addEventListener('keypress', (e) => {
@@ -155,14 +148,13 @@ searchInput.addEventListener('keypress', (e) => {
     }
 });
 
-// Close search on outside click (click on the page background)
 document.addEventListener('click', (e) => {
     if (searchOpen && !searchPanel.contains(e.target) && e.target !== searchToggle) {
         closeSearch();
     }
 });
 
-// ------------------------ THEME ENGINE (unchanged) ------------------------
+// ------------------------ THEME ENGINE ------------------------
 function applyTheme(theme) {
     const root = document.documentElement;
     root.style.setProperty('--bg', theme.bg || '#0a0a0a');
@@ -237,7 +229,7 @@ document.querySelectorAll('#themeSegmented .seg-option').forEach(btn => {
 });
 populatePalette('theme');
 
-// ------------------------ AD CAROUSEL (unchanged) ------------------------
+// ------------------------ AD CAROUSEL ------------------------
 function initAdCarousel() {
     adWrapper.innerHTML = ADS.map(ad => `
         <div class="swiper-slide">
@@ -255,7 +247,7 @@ function initAdCarousel() {
 }
 initAdCarousel();
 
-// ------------------------ CATEGORY BAR (unchanged) ------------------------
+// ------------------------ CATEGORY BAR ------------------------
 function renderCategories() {
     catBar.innerHTML = CATEGORIES.map(cat => `
         <button class="cat-btn ${cat === state.currentCategory ? 'active' : ''}" data-cat="${cat}">${cat}</button>
@@ -266,7 +258,7 @@ function renderCategories() {
             state.offset = 0;
             state.hasMore = true;
             state.games = [];
-            generateNewSeed(); // Force reshuffle for new category!
+            generateNewSeed();
             renderCategories();
             loadGames(true);
         });
@@ -279,7 +271,7 @@ function generateNewSeed() {
     state.sessionSeed = Math.floor(Math.random() * 1000000000);
 }
 
-// ------------------------ FETCH GAMES FROM BACKEND ------------------------
+// ------------------------ FETCH GAMES ------------------------
 async function fetchGames(category, offset, limit, search = '', seed = null) {
     let url = `${BACKEND_URL}/games?limit=${limit}&offset=${offset}`;
     if (category && category !== '🔥 Discover') {
@@ -296,7 +288,7 @@ async function fetchGames(category, offset, limit, search = '', seed = null) {
     return resp.json();
 }
 
-// ------------------------ RENDER GAMES (unchanged) ------------------------
+// ------------------------ RENDER GAMES ------------------------
 function renderGames(games, append = false) {
     const container = grid;
     if (!append) container.innerHTML = '';
@@ -317,7 +309,7 @@ function renderGames(games, append = false) {
     container.appendChild(fragment);
 }
 
-// ------------------------ LOAD GAMES (with skeleton) ------------------------
+// ------------------------ LOAD GAMES ------------------------
 async function loadGames(reset = false) {
     if (state.loading || (!state.hasMore && !reset)) return;
     state.loading = true;
@@ -342,7 +334,7 @@ async function loadGames(reset = false) {
             state.offset,
             state.limit,
             state.searchQuery,
-            state.sessionSeed // pass the current seed
+            state.sessionSeed
         );
         if (data.length < state.limit) state.hasMore = false;
         state.games = reset ? data : [...state.games, ...data];
@@ -355,36 +347,47 @@ async function loadGames(reset = false) {
     }
 }
 
-// ------------------------ INFINITE SCROLL (unchanged) ------------------------
-const gridContainer = document.getElementById('gameGrid');
+// ------------------------ INFINITE SCROLL ------------------------
 gridContainer.addEventListener('scroll', () => {
     if (gridContainer.scrollTop + gridContainer.clientHeight >= gridContainer.scrollHeight - 100) {
         if (!state.loading && state.hasMore) loadGames(false);
     }
 });
 
-// ------------------------ COLLAPSE AD ON SCROLL (NEW) ------------------------
-const SCROLL_THRESHOLD = 20; // pixels before hiding
+// ==================== PARALLAX AD COLLAPSE (SCROLL-DRIVEN) ====================
+let ticking = false;
+const AD_HEIGHT = 160; // must match CSS height of .ad-carousel
+const TOP_BAR_HEIGHT = 56;
+const CAT_BAR_HEIGHT = 48;
 
 gridContainer.addEventListener('scroll', () => {
-    const scrollTop = gridContainer.scrollTop;
-    if (scrollTop > SCROLL_THRESHOLD) {
-        document.body.classList.add('ad-hidden');
-    } else {
-        document.body.classList.remove('ad-hidden');
+    if (!ticking) {
+        window.requestAnimationFrame(() => {
+            const scrollTop = gridContainer.scrollTop;
+            // clamp offset between 0 and AD_HEIGHT
+            const offset = Math.min(scrollTop, AD_HEIGHT);
+            // Move ad up by offset
+            adCarousel.style.transform = `translateY(-${offset}px)`;
+            // Move category bar up (starts at 56+160 = 216px)
+            catBar.style.top = `${TOP_BAR_HEIGHT + AD_HEIGHT - offset}px`;
+            // Move game grid up (starts at 56+160+48 = 264px)
+            gridContainer.style.top = `${TOP_BAR_HEIGHT + AD_HEIGHT + CAT_BAR_HEIGHT - offset}px`;
+            ticking = false;
+        });
+        ticking = true;
     }
 });
 
-// ------------------------ PULL-TO-REFRESH (unchanged) ------------------------
+// ------------------------ PULL-TO-REFRESH ------------------------
 refreshBtn.addEventListener('click', () => {
     state.offset = 0;
     state.hasMore = true;
     state.games = [];
-    generateNewSeed(); // Force reshuffle on manual refresh!
+    generateNewSeed();
     loadGames(true);
 });
 
-// ------------------------ GAME MODAL (unchanged) ------------------------
+// ------------------------ GAME MODAL ------------------------
 function openGame(game) {
     gameIframe.src = game.playable_url;
     gameModal.classList.add('active');
@@ -407,7 +410,7 @@ gameModal.addEventListener('click', (e) => {
     }
 });
 
-// ------------------------ RECENT GAMES (unchanged) ------------------------
+// ------------------------ RECENT GAMES ------------------------
 function renderRecentGames() {
     const container = document.getElementById('recentGames');
     const recent = JSON.parse(localStorage.getItem('nanogamz_recent') || '[]');
@@ -434,7 +437,7 @@ function renderRecentGames() {
 }
 renderRecentGames();
 
-// ------------------------ SIDE MENU (unchanged) ------------------------
+// ------------------------ SIDE MENU ------------------------
 function toggleMenu() {
     const isOpen = menuPanel.classList.contains('open');
     menuPanel.classList.toggle('open');
