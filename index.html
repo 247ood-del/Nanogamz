@@ -46,8 +46,13 @@
 
 <!-- Game Modal -->
 <div class="game-modal" id="gameModal">
+    <div class="game-control-pill">
+        <button id="muteBtn" class="pill-btn" title="Mute/Unmute">🔊</button>
+        <button id="saveBtn" class="pill-btn" title="Save/Unsave">🔖</button>
+        <span class="pill-divider">|</span>
+        <button id="modalClose" class="pill-btn" title="Close">✕</button>
+    </div>
     <iframe id="gameIframe" allow="fullscreen" allowfullscreen></iframe>
-    <button class="close-btn" id="modalClose">✕ Close</button>
 </div>
 
 <!-- Side Menu -->
@@ -76,6 +81,9 @@
             <div class="recent-games" id="recentGames"></div>
         </div>
     </div>
+
+    <!-- SAVED GAMES LINK (Underneath User Card) -->
+    <a class="menu-link" id="savedGamesLink">📌 Saved Games</a>
 
     <a class="menu-link" id="shareLink">🔗 Share Bot with Friends</a>
     <a class="menu-link" href="https://t.me/nanogamz">📢 Channel</a>
@@ -120,6 +128,18 @@
             <p>We do not share your data with third parties. All data is stored securely in our Supabase database.</p>
             <p>You may request deletion of your data at any time by contacting <a href="https://t.me/ojareridominion" target="_blank">support</a>.</p>
         </div>
+    </div>
+</div>
+
+<!-- SAVED GAMES FULLSCREEN OVERLAY -->
+<div class="saved-overlay" id="savedOverlay">
+    <div class="saved-header">
+        <button class="back-btn" id="closeSavedOverlay">← Back</button>
+        <h2>📌 Saved Games</h2>
+        <div style="width: 50px;"></div>
+    </div>
+    <div class="saved-grid-container" id="savedGridContainer">
+        <div class="grid" id="savedGrid"></div>
     </div>
 </div>
 
