@@ -619,6 +619,97 @@ saveBtn.addEventListener('click', async (e) => {
     }
 });
 
+// ==================== DRAGGABLE CONTROL PILL LOGIC ====================
+const pill = document.querySelector('.game-control-pill');
+
+if (pill) {
+    let isDragging = false;
+    let hasDragged = false;
+    let startX, startY, initialLeft, initialTop;
+
+    const startDrag = (clientX, clientY) => {
+        isDragging = true;
+        hasDragged = false;
+        startX = clientX;
+        startY = clientY;
+
+        const rect = pill.getBoundingClientRect();
+        initialLeft = rect.left;
+        initialTop = rect.top;
+
+        // Switch from right-based positioning to left/top absolute offsets for smooth dragging
+        pill.style.right = 'auto';
+        pill.style.left = `${initialLeft}px`;
+        pill.style.top = `${initialTop}px`;
+    };
+
+    const moveDrag = (clientX, clientY) => {
+        if (!isDragging) return;
+
+        const deltaX = clientX - startX;
+        const deltaY = clientY - startY;
+
+        // Mark as dragged if threshold passed (prevents click events from firing accidentally when dragging)
+        if (Math.abs(deltaX) > 5 || Math.abs(deltaY) > 5) {
+            hasDragged = true;
+        }
+
+        // Calculate target positions
+        let newLeft = initialLeft + deltaX;
+        let newTop = initialTop + deltaY;
+
+        // Keep inside screen bounds
+        const maxLeft = window.innerWidth - pill.offsetWidth - 10;
+        const maxTop = window.innerHeight - pill.offsetHeight - 10;
+
+        newLeft = Math.max(10, Math.min(newLeft, maxLeft));
+        newTop = Math.max(10, Math.min(newTop, maxTop));
+
+        pill.style.left = `${newLeft}px`;
+        pill.style.top = `${newTop}px`;
+    };
+
+    const endDrag = () => {
+        isDragging = false;
+    };
+
+    // --- Touch Events (Mobile Telegram Mini App) ---
+    pill.addEventListener('touchstart', (e) => {
+        const touch = e.touches[0];
+        startDrag(touch.clientX, touch.clientY);
+    }, { passive: true });
+
+    window.addEventListener('touchmove', (e) => {
+        if (isDragging) {
+            const touch = e.touches[0];
+            moveDrag(touch.clientX, touch.clientY);
+        }
+    }, { passive: true });
+
+    window.addEventListener('touchend', endDrag);
+
+    // --- Mouse Events (Desktop Testing) ---
+    pill.addEventListener('mousedown', (e) => {
+        startDrag(e.clientX, e.clientY);
+    });
+
+    window.addEventListener('mousemove', (e) => {
+        moveDrag(e.clientX, e.clientY);
+    });
+
+    window.addEventListener('mouseup', endDrag);
+
+    // Block button clicks if user was dragging the pill
+    pill.querySelectorAll('.pill-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            if (hasDragged) {
+                e.stopImmediatePropagation();
+                e.preventDefault();
+            }
+        }, true);
+    });
+}
+
 // ==================== SAVED GAMES OVERLAY ====================
 async function loadSavedGames(reset = false) {
     if (state.loadingSaved || (!state.savedHasMore && !reset)) return;
