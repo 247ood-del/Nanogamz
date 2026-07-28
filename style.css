@@ -311,7 +311,7 @@ body.search-open .game-grid {
     background: #000;
 }
 
-/* Floating Controls Pill (Matching Image) */
+/* Floating Controls Pill (Movable / Draggable) */
 .game-control-pill {
     position: absolute;
     top: 14px;
@@ -319,14 +319,23 @@ body.search-open .game-grid {
     z-index: 10000;
     display: flex;
     align-items: center;
-    background: rgba(0, 0, 0, 0.45);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
     border: 1px solid rgba(255, 255, 255, 0.2);
     border-radius: 20px;
-    padding: 4px 10px;
+    padding: 6px 12px;
     gap: 12px;
+    touch-action: none; /* Prevents page scrolling while dragging on touch screens */
+    user-select: none;
+    cursor: grab;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
 }
+
+.game-control-pill:active {
+    cursor: grabbing;
+}
+
 .pill-btn {
     background: none;
     border: none;
@@ -726,4 +735,4 @@ body.search-open .game-grid {
 .game-grid {
     transition: none;
     will-change: top;
-                          }
+}
