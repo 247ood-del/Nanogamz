@@ -145,6 +145,60 @@ async def toggle_save_game(request: Request):
         logger.error(f"Error toggling saved game: {e}")
         return {"status": "error", "message": str(e)}
 
+# --- Recent Games Endpoints (NEW) ---
+@app.get("/recent-games")
+async def get_recent_games(telegram_id: int):
+    try:
+        user_res = supabase.table("users").select("recent_games").eq("telegram_id", telegram_id).execute()
+        if not user_res.data or not user_res.data[0].get("recent_games"):
+            return []
+
+        recent_ids = user_res.data[0]["recent_games"]
+        if not recent_ids:
+            return []
+
+        # Fetch full game records for these IDs
+        games_res = supabase.table("games").select("*").in_("id", recent_ids).execute()
+        games = games_res.data or []
+
+        # Map back to preserve order from most recent to oldest
+        game_dict = {str(g["id"]): g for g in games}
+        ordered_games = [game_dict[str(gid)] for gid in recent_ids if str(gid) in game_dict]
+
+        return ordered_games
+    except Exception as e:
+        logger.error(f"Error fetching recent games: {e}")
+        return []
+
+@app.post("/add-recent-game")
+async def add_recent_game(request: Request):
+    try:
+        data = await request.json()
+        telegram_id = data.get("telegram_id")
+        game_id = str(data.get("game_id"))
+
+        if not telegram_id or not game_id:
+            return {"status": "error", "message": "Missing parameters"}
+
+        user_res = supabase.table("users").select("recent_games").eq("telegram_id", telegram_id).execute()
+        current_recent = []
+        if user_res.data and user_res.data[0].get("recent_games"):
+            current_recent = [str(x) for x in user_res.data[0]["recent_games"]]
+
+        # Remove if already exists, then prepend to top (most recent first)
+        if game_id in current_recent:
+            current_recent.remove(game_id)
+        current_recent.insert(0, game_id)
+
+        # Keep last 10 games max
+        current_recent = current_recent[:10]
+
+        supabase.table("users").update({"recent_games": current_recent}).eq("telegram_id", telegram_id).execute()
+        return {"status": "success", "recent_games": current_recent}
+    except Exception as e:
+        logger.error(f"Error adding recent game: {e}")
+        return {"status": "error", "message": str(e)}
+
 # --- Bot Handlers ---
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
