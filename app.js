@@ -51,7 +51,14 @@ const state = {
         text: '#ffffff',
         bar: '#1a1a1a',
         accent: '#6c5ce7'
-    }
+    },
+    // Saved games & mute state
+    savedGameIds: new Set(),
+    isMuted: false,
+    savedOffset: 0,
+    savedLimit: 20,
+    savedHasMore: true,
+    loadingSaved: false
 };
 
 // ------------------------ TELEGRAM WEBAPP ------------------------
@@ -98,6 +105,15 @@ const adWrapper = document.getElementById('adWrapper');
 const closeMenuBtn = document.getElementById('closeMenuBtn');
 const adCarousel = document.querySelector('.ad-carousel');
 const gridContainer = document.getElementById('gameGrid');
+
+// New elements for pill controls and saved games
+const muteBtn = document.getElementById('muteBtn');
+const saveBtn = document.getElementById('saveBtn');
+const savedOverlay = document.getElementById('savedOverlay');
+const savedGamesLink = document.getElementById('savedGamesLink');
+const closeSavedOverlay = document.getElementById('closeSavedOverlay');
+const savedGrid = document.getElementById('savedGrid');
+const savedGridContainer = document.getElementById('savedGridContainer');
 
 // ------------------------ SEARCH PANEL ------------------------
 const searchPanel = document.getElementById('searchPanel');
@@ -410,9 +426,15 @@ refreshBtn.addEventListener('click', () => {
 });
 
 // ------------------------ GAME MODAL ------------------------
+let activeModalGame = null;
+
 function openGame(game) {
+    activeModalGame = game;
+    syncSavedState(game.id);
     gameIframe.src = game.playable_url;
     gameModal.classList.add('active');
+
+    // Track recent game
     const recent = JSON.parse(localStorage.getItem('nanogamz_recent') || '[]');
     const filtered = recent.filter(g => g.id !== game.id);
     filtered.unshift({ id: game.id, title: game.title, thumbnail: game.thumbnail });
@@ -549,6 +571,171 @@ document.getElementById('supportLink').addEventListener('click', (e) => {
     e.preventDefault();
     tg.openTelegramLink('https://t.me/ojareridominion');
     toggleMenu();
+});
+
+// ==================== PILL CONTROLS ====================
+// Mute/Unmute
+muteBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    state.isMuted = !state.isMuted;
+    muteBtn.textContent = state.isMuted ? '🔇' : '🔊';
+    try {
+        if (gameIframe.contentWindow) {
+            const mediaEls = gameIframe.contentWindow.document.querySelectorAll('audio, video');
+            mediaEls.forEach(el => el.muted = state.isMuted);
+        }
+    } catch (err) {
+        // Cross-origin iframe audio block fallback
+    }
+});
+
+// Save/Unsave
+async function syncSavedState(gameId) {
+    const isSaved = state.savedGameIds.has(String(gameId));
+    saveBtn.textContent = isSaved ? '📑' : '🔖';
+    saveBtn.title = isSaved ? 'Delete from Saved' : 'Save Game';
+}
+
+saveBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (!activeModalGame || !state.user) {
+        alert('Please open the app inside Telegram to save games.');
+        return;
+    }
+    const gId = String(activeModalGame.id);
+    try {
+        const resp = await fetch(`${BACKEND_URL}/toggle-save-game`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ telegram_id: state.user.id, game_id: gId })
+        });
+        const data = await resp.json();
+        if (data.status === 'success') {
+            state.savedGameIds = new Set(data.saved_games.map(String));
+            syncSavedState(gId);
+        }
+    } catch (err) {
+        console.error('Failed to toggle save state', err);
+    }
+});
+
+// ==================== SAVED GAMES OVERLAY ====================
+async function loadSavedGames(reset = false) {
+    if (state.loadingSaved || (!state.savedHasMore && !reset)) return;
+    state.loadingSaved = true;
+
+    if (reset) {
+        savedGrid.innerHTML = '';
+        state.savedOffset = 0;
+        state.savedHasMore = true;
+        for (let i = 0; i < 4; i++) {
+            const skel = document.createElement('div');
+            skel.className = 'skeleton-card';
+            skel.innerHTML = `<div class="img"></div><div class="line"></div>`;
+            savedGrid.appendChild(skel);
+        }
+    }
+
+    try {
+        if (!state.user) {
+            savedGrid.innerHTML = '<div class="saved-empty-state">Unable to load user context.</div>';
+            return;
+        }
+
+        const resp = await fetch(`${BACKEND_URL}/saved-games?telegram_id=${state.user.id}&limit=${state.savedLimit}&offset=${state.savedOffset}`);
+        const games = await resp.json();
+
+        if (reset) savedGrid.innerHTML = '';
+
+        if (!games || games.length === 0) {
+            if (reset) {
+                savedGrid.innerHTML = '<div class="saved-empty-state">No games saved yet</div>';
+            }
+            state.savedHasMore = false;
+            return;
+        }
+
+        if (games.length < state.savedLimit) state.savedHasMore = false;
+
+        games.forEach(game => {
+            const card = document.createElement('div');
+            card.className = 'game-card';
+            card.innerHTML = `
+                <button class="card-menu-btn">⋮</button>
+                <div class="card-dropdown">
+                    <div class="card-dropdown-item delete-item">🗑 Delete</div>
+                </div>
+                <img src="${game.thumbnail || 'https://via.placeholder.com/300x200/333/666?text=No+Image'}" alt="${game.title}" loading="lazy" />
+                <div class="info">
+                    <div class="title">${game.title}</div>
+                    <div class="category">${game.category || 'Other'}</div>
+                </div>
+            `;
+
+            const menuBtn = card.querySelector('.card-menu-btn');
+            const dropdown = card.querySelector('.card-dropdown');
+            const deleteItem = card.querySelector('.delete-item');
+
+            menuBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                dropdown.classList.toggle('show');
+            });
+
+            deleteItem.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                dropdown.classList.remove('show');
+                await fetch(`${BACKEND_URL}/toggle-save-game`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ telegram_id: state.user.id, game_id: String(game.id) })
+                });
+                state.savedGameIds.delete(String(game.id));
+                card.remove();
+                if (savedGrid.children.length === 0) {
+                    savedGrid.innerHTML = '<div class="saved-empty-state">No games saved yet</div>';
+                }
+            });
+
+            card.addEventListener('click', () => {
+                openGame(game);
+            });
+
+            savedGrid.appendChild(card);
+        });
+
+        state.savedOffset += games.length;
+    } catch (e) {
+        console.error(e);
+        if (reset) savedGrid.innerHTML = '<div class="saved-empty-state">Failed to load saved games.</div>';
+    } finally {
+        state.loadingSaved = false;
+    }
+}
+
+// Close dropdowns on outside click
+document.addEventListener('click', () => {
+    document.querySelectorAll('.card-dropdown.show').forEach(d => d.classList.remove('show'));
+});
+
+// Open saved overlay
+savedGamesLink.addEventListener('click', (e) => {
+    e.preventDefault();
+    toggleMenu();
+    savedOverlay.classList.add('active');
+    loadSavedGames(true);
+});
+
+closeSavedOverlay.addEventListener('click', () => {
+    savedOverlay.classList.remove('active');
+});
+
+// Infinite scroll inside Saved Games overlay
+savedGridContainer.addEventListener('scroll', () => {
+    if (savedGridContainer.scrollTop + savedGridContainer.clientHeight >= savedGridContainer.scrollHeight - 100) {
+        if (!state.loadingSaved && state.savedHasMore) {
+            loadSavedGames(false);
+        }
+    }
 });
 
 // ------------------------ INITIAL LOAD ------------------------
