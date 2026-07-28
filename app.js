@@ -428,19 +428,83 @@ refreshBtn.addEventListener('click', () => {
 // ------------------------ GAME MODAL ------------------------
 let activeModalGame = null;
 
+// --- DATABASE-DRIVEN RECENT GAMES LOGIC (NEW) ---
+
+async function recordRecentGame(gameId) {
+    if (!state.user || !state.user.id) return;
+    try {
+        await fetch(`${BACKEND_URL}/add-recent-game`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                telegram_id: state.user.id,
+                game_id: String(gameId)
+            })
+        });
+        // Refresh recent games UI in menu
+        renderRecentGames();
+    } catch (err) {
+        console.error("Failed to record recent game:", err);
+    }
+}
+
+async function renderRecentGames() {
+    const recentGamesContainer = document.getElementById('recentGames');
+    if (!recentGamesContainer) return;
+
+    if (!state.user || !state.user.id) {
+        recentGamesContainer.innerHTML = '<span style="font-size:12px; opacity:0.5;">Log in to see recent games</span>';
+        return;
+    }
+
+    try {
+        const resp = await fetch(`${BACKEND_URL}/recent-games?telegram_id=${state.user.id}`);
+        const games = await resp.json();
+
+        recentGamesContainer.innerHTML = '';
+
+        if (!games || games.length === 0) {
+            recentGamesContainer.innerHTML = '<span style="font-size:12px; opacity:0.5;">No recently played games</span>';
+            return;
+        }
+
+        games.forEach(game => {
+            const item = document.createElement('div');
+            item.className = 'recent-game';  // matches existing CSS
+            item.style.cursor = 'pointer';
+            item.innerHTML = `
+                <img src="${game.thumbnail || 'https://via.placeholder.com/70/333/666?text=?'}" alt="${game.title}" />
+                <div style="font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${game.title}</div>
+            `;
+
+            // Directly launches the complete game object returned from Supabase!
+            item.addEventListener('click', () => {
+                toggleMenu(); // Close side menu
+                openGame(game);
+            });
+
+            recentGamesContainer.appendChild(item);
+        });
+    } catch (err) {
+        console.error("Error rendering recent games:", err);
+    }
+}
+
+// Update openGame function to record game open event in Supabase
 function openGame(game) {
+    if (!game || !game.playable_url) {
+        alert("Game URL not found. Please try again.");
+        return;
+    }
+
     activeModalGame = game;
     syncSavedState(game.id);
+    
     gameIframe.src = game.playable_url;
     gameModal.classList.add('active');
 
-    // Track recent game
-    const recent = JSON.parse(localStorage.getItem('nanogamz_recent') || '[]');
-    const filtered = recent.filter(g => g.id !== game.id);
-    filtered.unshift({ id: game.id, title: game.title, thumbnail: game.thumbnail });
-    if (filtered.length > 10) filtered.pop();
-    localStorage.setItem('nanogamz_recent', JSON.stringify(filtered));
-    renderRecentGames();
+    // Record game into user's recent_games array in Supabase
+    recordRecentGame(game.id);
 }
 
 modalClose.addEventListener('click', () => {
@@ -455,31 +519,10 @@ gameModal.addEventListener('click', (e) => {
 });
 
 // ------------------------ RECENT GAMES ------------------------
-function renderRecentGames() {
-    const container = document.getElementById('recentGames');
-    const recent = JSON.parse(localStorage.getItem('nanogamz_recent') || '[]');
-    if (recent.length === 0) {
-        container.innerHTML = '<div style="opacity:0.5; font-size:13px;">No games played yet</div>';
-        return;
-    }
-    container.innerHTML = recent.map(g => `
-        <div class="recent-game" data-id="${g.id}">
-            <img src="${g.thumbnail || 'https://via.placeholder.com/70/333/666?text=?'}" alt="${g.title}" />
-            <div style="font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${g.title}</div>
-        </div>
-    `).join('');
-    container.querySelectorAll('.recent-game').forEach(el => {
-        el.addEventListener('click', () => {
-            const id = el.dataset.id;
-            const game = state.games.find(g => g.id === id);
-            if (game) openGame(game);
-            else {
-                alert('Game not found in current list. Please refresh.');
-            }
-        });
-    });
-}
-renderRecentGames();
+// (Initial render – kept for backward compatibility, but the async version will overwrite)
+// We still call renderRecentGames after user is set and on menu open.
+// The old localStorage-based render is replaced by the async version above.
+// The initial call will be made in the menu toggle logic below.
 
 // ------------------------ SIDE MENU ------------------------
 function toggleMenu() {
@@ -487,6 +530,10 @@ function toggleMenu() {
     menuPanel.classList.toggle('open');
     menuOverlay.classList.toggle('active');
     document.body.style.overflow = isOpen ? '' : 'hidden';
+    if (!isOpen) {
+        // When opening menu, refresh recent games from server
+        renderRecentGames();
+    }
 }
 menuToggle.addEventListener('click', toggleMenu);
 menuOverlay.addEventListener('click', toggleMenu);
@@ -831,3 +878,5 @@ savedGridContainer.addEventListener('scroll', () => {
 
 // ------------------------ INITIAL LOAD ------------------------
 loadGames(true);
+// Initial render of recent games (will be refreshed when menu opens)
+renderRecentGames();
