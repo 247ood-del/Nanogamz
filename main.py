@@ -89,6 +89,62 @@ async def get_games(
     except Exception as e:
         return {"error": str(e)}, 500
 
+# --- Saved Games Endpoints ---
+@app.get("/saved-games")
+async def get_saved_games(
+    telegram_id: int,
+    limit: int = 20,
+    offset: int = 0
+):
+    try:
+        # 1. Get saved_games list for user
+        user_res = supabase.table("users").select("saved_games").eq("telegram_id", telegram_id).execute()
+        if not user_res.data or not user_res.data[0].get("saved_games"):
+            return []
+
+        saved_ids = user_res.data[0]["saved_games"]
+        if not saved_ids:
+            return []
+
+        # 2. Fetch full game details for these IDs
+        games_res = supabase.table("games").select("*").in_("id", saved_ids).execute()
+        games = games_res.data or []
+
+        # 3. Paginate
+        return games[offset : offset + limit]
+    except Exception as e:
+        logger.error(f"Error fetching saved games: {e}")
+        return []
+
+@app.post("/toggle-save-game")
+async def toggle_save_game(request: Request):
+    try:
+        data = await request.json()
+        telegram_id = data.get("telegram_id")
+        game_id = str(data.get("game_id"))
+
+        if not telegram_id or not game_id:
+            return {"status": "error", "message": "Missing telegram_id or game_id"}
+
+        # Get current saved list
+        user_res = supabase.table("users").select("saved_games").eq("telegram_id", telegram_id).execute()
+        current_saved = []
+        if user_res.data and user_res.data[0].get("saved_games"):
+            current_saved = user_res.data[0]["saved_games"]
+
+        if game_id in current_saved:
+            current_saved.remove(game_id)
+            is_saved = False
+        else:
+            current_saved.append(game_id)
+            is_saved = True
+
+        supabase.table("users").update({"saved_games": current_saved}).eq("telegram_id", telegram_id).execute()
+        return {"status": "success", "is_saved": is_saved, "saved_games": current_saved}
+    except Exception as e:
+        logger.error(f"Error toggling saved game: {e}")
+        return {"status": "error", "message": str(e)}
+
 # --- Bot Handlers ---
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
