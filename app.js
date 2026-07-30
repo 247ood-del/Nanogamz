@@ -138,15 +138,36 @@ function closeSearch() {
     searchOpen = false;
     searchToggle.textContent = '🔍';
     searchInput.value = '';
+    // Do NOT reset state.searchQuery here – that is handled by resetSearch() when needed
+}
+
+function resetSearch() {
+    // Clear search state and reload the current category view
+    if (state.searchQuery === '') {
+        // If already empty, just close the panel
+        closeSearch();
+        return;
+    }
+    state.searchQuery = '';
+    state.offset = 0;
+    state.hasMore = true;
+    state.games = [];
+    generateNewSeed();
+    loadGames(true);
+    closeSearch();
 }
 
 function toggleSearch() {
-    if (searchOpen) closeSearch();
-    else openSearch();
+    if (searchOpen) {
+        resetSearch(); // user closed without submitting -> clear search
+    } else {
+        openSearch();
+    }
 }
 
 function performSearch() {
     const query = searchInput.value.trim();
+    // Close panel first (UI), then set query and load
     closeSearch();
     state.searchQuery = query;
     state.offset = 0;
@@ -165,9 +186,10 @@ searchInput.addEventListener('keypress', (e) => {
     }
 });
 
+// Clicking outside the search panel clears the search
 document.addEventListener('click', (e) => {
     if (searchOpen && !searchPanel.contains(e.target) && e.target !== searchToggle) {
-        closeSearch();
+        resetSearch();
     }
 });
 
