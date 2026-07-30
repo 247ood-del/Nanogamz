@@ -138,7 +138,6 @@ function closeSearch() {
     searchOpen = false;
     searchToggle.textContent = '🔍';
     searchInput.value = '';
-    // Do NOT reset state.searchQuery here – that is handled by resetSearch() when needed
 }
 
 function resetSearch() {
@@ -439,13 +438,19 @@ gridContainer.addEventListener('scroll', () => {
 // Ensure initial position is correct
 resetAdOffset();
 
-// ------------------------ PULL-TO-REFRESH ------------------------
+// ------------------------ PULL-TO-REFRESH (with search cancellation) ------------------------
 refreshBtn.addEventListener('click', () => {
-    state.offset = 0;
-    state.hasMore = true;
-    state.games = [];
-    generateNewSeed();
-    loadGames(true);
+    if (state.searchQuery) {
+        // Clear active search and reload current category
+        resetSearch(); // this also closes panel and reloads
+    } else {
+        // Normal refresh
+        state.offset = 0;
+        state.hasMore = true;
+        state.games = [];
+        generateNewSeed();
+        loadGames(true);
+    }
 });
 
 // ------------------------ GAME MODAL ------------------------
