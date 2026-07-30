@@ -54,7 +54,7 @@ function showToast(message, type = 'info', duration = 3000) {
 const state = {
     currentCategory: '🔥 Discover',
     offset: 0,
-    limit: 20,
+    limit: 30,
     games: [],
     loading: false,
     hasMore: true,
