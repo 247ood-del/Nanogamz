@@ -132,6 +132,8 @@ const savedGamesLink = document.getElementById('savedGamesLink');
 const closeSavedOverlay = document.getElementById('closeSavedOverlay');
 const savedGrid = document.getElementById('savedGrid');
 const savedGridContainer = document.getElementById('savedGridContainer');
+// NEW: refresh button inside saved overlay
+const refreshSavedBtn = document.getElementById('refreshSavedBtn');
 
 // ------------------------ SEARCH PANEL ------------------------
 const searchPanel = document.getElementById('searchPanel');
@@ -718,6 +720,14 @@ saveBtn.addEventListener('click', async (e) => {
             syncSavedState(gId);
             const message = data.is_saved ? 'Game saved!' : 'Game removed from saved.';
             showToast(message, 'success');
+
+            // 🔥 FIX #1: If the saved overlay is currently open, refresh it automatically
+            if (savedOverlay.classList.contains('active')) {
+                // Reset offset and reload from scratch
+                state.savedOffset = 0;
+                state.savedHasMore = true;
+                loadSavedGames(true);
+            }
         } else {
             showToast('Failed to update saved games.', 'error');
         }
@@ -895,6 +905,8 @@ async function loadSavedGames(reset = false) {
                         savedGrid.innerHTML = '<div class="saved-empty-state">No games saved yet</div>';
                     }
                     showToast('Game removed from saved.', 'success');
+                    // 🔥 FIX #1: also refresh the main grid's saved state? Not needed, but we can keep consistency
+                    // However, the main grid doesn't show saved status, so it's fine.
                 } catch (err) {
                     showToast('Failed to remove game.', 'error');
                 }
@@ -933,6 +945,18 @@ savedGamesLink.addEventListener('click', (e) => {
 closeSavedOverlay.addEventListener('click', () => {
     savedOverlay.classList.remove('active');
 });
+
+// 🔥 FIX #3: Manual refresh button inside the saved overlay
+if (refreshSavedBtn) {
+    refreshSavedBtn.addEventListener('click', () => {
+        // Reset and reload the saved games
+        state.savedOffset = 0;
+        state.savedHasMore = true;
+        loadSavedGames(true);
+        // Optionally show a toast feedback
+        showToast('Refreshing saved games...', 'info', 1000);
+    });
+}
 
 // Infinite scroll inside Saved Games overlay
 savedGridContainer.addEventListener('scroll', () => {
