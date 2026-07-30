@@ -88,6 +88,9 @@ if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
         ctx.fillText(initials || 'U', 50, 52);
         document.getElementById('userAvatar').src = canvas.toDataURL();
     }
+
+    // 🔽 Pre-fetch saved games when user is verified
+    fetchUserSavedGameIds();
 }
 
 // ------------------------ DOM REFS ------------------------
@@ -490,14 +493,30 @@ async function renderRecentGames() {
     }
 }
 
+// ==================== FETCH USER'S SAVED GAME IDs ====================
+async function fetchUserSavedGameIds() {
+    if (!state.user || !state.user.id) return;
+    try {
+        const resp = await fetch(`${BACKEND_URL}/saved-games?telegram_id=${state.user.id}`);
+        const games = await resp.json();
+        if (Array.isArray(games)) {
+            state.savedGameIds = new Set(games.map(g => String(g.id)));
+        }
+    } catch (err) {
+        console.error("Failed to pre-fetch saved games:", err);
+    }
+}
+
 // Update openGame function to record game open event in Supabase
-function openGame(game) {
+async function openGame(game) {
     if (!game || !game.playable_url) {
         alert("Game URL not found. Please try again.");
         return;
     }
 
     activeModalGame = game;
+
+    // 1. Immediately reflect current saved state in UI
     syncSavedState(game.id);
     
     gameIframe.src = game.playable_url;
@@ -505,6 +524,12 @@ function openGame(game) {
 
     // Record game into user's recent_games array in Supabase
     recordRecentGame(game.id);
+
+    // 2. Fetch fresh list in background to ensure accurate button state
+    if (state.user && state.user.id) {
+        await fetchUserSavedGameIds();
+        syncSavedState(game.id);
+    }
 }
 
 modalClose.addEventListener('click', () => {
