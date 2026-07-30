@@ -52,9 +52,8 @@ const state = {
         bar: '#1a1a1a',
         accent: '#6c5ce7'
     },
-    // Saved games & mute state
+    // Saved games
     savedGameIds: new Set(),
-    isMuted: false,
     savedOffset: 0,
     savedLimit: 20,
     savedHasMore: true,
@@ -110,7 +109,6 @@ const adCarousel = document.querySelector('.ad-carousel');
 const gridContainer = document.getElementById('gameGrid');
 
 // New elements for pill controls and saved games
-const muteBtn = document.getElementById('muteBtn');
 const saveBtn = document.getElementById('saveBtn');
 const savedOverlay = document.getElementById('savedOverlay');
 const savedGamesLink = document.getElementById('savedGamesLink');
@@ -646,21 +644,6 @@ document.getElementById('supportLink').addEventListener('click', (e) => {
 });
 
 // ==================== PILL CONTROLS ====================
-// Mute/Unmute
-muteBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    state.isMuted = !state.isMuted;
-    muteBtn.textContent = state.isMuted ? '🔇' : '🔊';
-    try {
-        if (gameIframe.contentWindow) {
-            const mediaEls = gameIframe.contentWindow.document.querySelectorAll('audio, video');
-            mediaEls.forEach(el => el.muted = state.isMuted);
-        }
-    } catch (err) {
-        // Cross-origin iframe audio block fallback
-    }
-});
-
 // Save/Unsave
 async function syncSavedState(gameId) {
     const isSaved = state.savedGameIds.has(String(gameId));
