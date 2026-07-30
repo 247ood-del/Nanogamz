@@ -222,9 +222,10 @@ body.search-open .game-grid {
     background: var(--bg);
     -webkit-overflow-scrolling: touch;
 }
-.game-grid .grid {
+.game-grid .grid,
+.saved-grid-container .grid {
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
     gap: 12px;
 }
 .game-card {
