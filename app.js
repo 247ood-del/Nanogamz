@@ -33,6 +33,23 @@ const CATEGORIES = [
     '😄 Fun'
 ];
 
+// ------------------------ TOAST SYSTEM ------------------------
+function showToast(message, type = 'info', duration = 3000) {
+    const container = document.getElementById('toast-container');
+    if (!container) return;
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    toast.textContent = message;
+    container.appendChild(toast);
+    requestAnimationFrame(() => {
+        toast.classList.add('show');
+    });
+    setTimeout(() => {
+        toast.classList.remove('show');
+        setTimeout(() => toast.remove(), 300);
+    }, duration);
+}
+
 // ------------------------ STATE ------------------------
 const state = {
     currentCategory: '🔥 Discover',
@@ -382,6 +399,7 @@ async function loadGames(reset = false) {
         state.offset += data.length;
     } catch (e) {
         console.error(e);
+        showToast('Failed to load games. Please try again.', 'error');
     } finally {
         state.loading = false;
     }
@@ -473,6 +491,7 @@ async function recordRecentGame(gameId) {
         renderRecentGames();
     } catch (err) {
         console.error("Failed to record recent game:", err);
+        showToast('Failed to save recent game.', 'error');
     }
 }
 
@@ -515,6 +534,7 @@ async function renderRecentGames() {
         });
     } catch (err) {
         console.error("Error rendering recent games:", err);
+        showToast('Failed to load recent games.', 'error');
     }
 }
 
@@ -529,6 +549,7 @@ async function fetchUserSavedGameIds() {
         }
     } catch (err) {
         console.error("Failed to pre-fetch saved games:", err);
+        showToast('Failed to load saved games.', 'error');
     }
 }
 
@@ -695,9 +716,14 @@ saveBtn.addEventListener('click', async (e) => {
         if (data.status === 'success') {
             state.savedGameIds = new Set(data.saved_games.map(String));
             syncSavedState(gId);
+            const message = data.is_saved ? 'Game saved!' : 'Game removed from saved.';
+            showToast(message, 'success');
+        } else {
+            showToast('Failed to update saved games.', 'error');
         }
     } catch (err) {
         console.error('Failed to toggle save state', err);
+        showToast('Network error. Please try again.', 'error');
     }
 });
 
@@ -857,15 +883,20 @@ async function loadSavedGames(reset = false) {
             deleteItem.addEventListener('click', async (e) => {
                 e.stopPropagation();
                 dropdown.classList.remove('show');
-                await fetch(`${BACKEND_URL}/toggle-save-game`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ telegram_id: state.user.id, game_id: String(game.id) })
-                });
-                state.savedGameIds.delete(String(game.id));
-                card.remove();
-                if (savedGrid.children.length === 0) {
-                    savedGrid.innerHTML = '<div class="saved-empty-state">No games saved yet</div>';
+                try {
+                    await fetch(`${BACKEND_URL}/toggle-save-game`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ telegram_id: state.user.id, game_id: String(game.id) })
+                    });
+                    state.savedGameIds.delete(String(game.id));
+                    card.remove();
+                    if (savedGrid.children.length === 0) {
+                        savedGrid.innerHTML = '<div class="saved-empty-state">No games saved yet</div>';
+                    }
+                    showToast('Game removed from saved.', 'success');
+                } catch (err) {
+                    showToast('Failed to remove game.', 'error');
                 }
             });
 
@@ -880,6 +911,7 @@ async function loadSavedGames(reset = false) {
     } catch (e) {
         console.error(e);
         if (reset) savedGrid.innerHTML = '<div class="saved-empty-state">Failed to load saved games.</div>';
+        showToast('Failed to load saved games.', 'error');
     } finally {
         state.loadingSaved = false;
     }
