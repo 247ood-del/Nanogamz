@@ -205,35 +205,53 @@ async def add_recent_game(request: Request):
         logger.error(f"Error adding recent game: {e}")
         return {"status": "error", "message": str(e)}
 
-# ========== NEW: CPAGrip Live Offers Endpoint ==========
+# ========== CPAGrip Live Offers Endpoint (UPDATED) ==========
 @app.get("/api/cpa-offers")
 async def get_cpa_offers(request: Request):
     """Fetches live CPAGrip offers based on client IP"""
     try:
-        # Get the real player IP for accurate geo-targeting
+        # Extract client IP for geo-targeting
         client_ip = request.headers.get("x-forwarded-for", request.client.host)
         if client_ip and "," in client_ip:
             client_ip = client_ip.split(",")[0].strip()
 
-        # Build the feed URL with the IP parameter
-        feed_url = f"{CPAGRIP_FEED_URL}&ip={client_ip}"
+        # Append ip parameter if present
+        delimiter = "&" if "?" in CPAGRIP_FEED_URL else "?"
+        feed_url = f"{CPAGRIP_FEED_URL}{delimiter}ip={client_ip}" if client_ip else CPAGRIP_FEED_URL
 
         response = requests.get(feed_url, timeout=6)
 
         if response.status_code == 200:
             data = response.json()
-            # CPAGrip can return a dict with "offers" or a direct list
-            raw_offers = data.get("offers", []) if isinstance(data, dict) else data
+            
+            # CPAGrip can wrap offers inside an 'offers' array or directly as a list
+            raw_offers = data.get("offers", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
 
-            # Clean and map the offers for your front‑end slider
             formatted_ads = []
-            for offer in raw_offers[:6]:  # Limit to top 6
+            for offer in raw_offers[:6]:
+                # Extract image and ensure valid HTTPS path
+                img_url = (
+                    offer.get("anchor_image") 
+                    or offer.get("image") 
+                    or offer.get("image_url") 
+                    or offer.get("ad_icon") 
+                    or ""
+                )
+
+                # Extract offer destination link
+                offer_link = offer.get("offerlink") or offer.get("link") or offer.get("url") or "#"
+                offer_id = offer.get("offer_id") or offer.get("offerid") or offer.get("id") or ""
+
+                # Skip invalid or incomplete offer objects
+                if not img_url:
+                    continue
+
                 formatted_ads.append({
-                    "id": str(offer.get("offerid", "")),
+                    "id": str(offer_id),
                     "title": offer.get("title", "Featured Offer"),
                     "description": offer.get("description", "Complete quick action to support us!"),
-                    "link": offer.get("link", "#"),
-                    "image": offer.get("anchor_image") or offer.get("image") or "assets/default-ad.png"
+                    "link": offer_link,
+                    "image": img_url
                 })
 
             return {"success": True, "ads": formatted_ads}
@@ -241,7 +259,7 @@ async def get_cpa_offers(request: Request):
         return {"success": False, "ads": []}
 
     except Exception as e:
-        logger.error(f"CPAGrip error: {e}")
+        logger.error(f"CPAGrip endpoint error: {e}")
         return {"success": False, "ads": []}
 
 # --- Bot Handlers ---
