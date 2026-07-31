@@ -208,55 +208,67 @@ async def add_recent_game(request: Request):
 # ========== CPAGrip Live Offers Endpoint (UPDATED) ==========
 @app.get("/api/cpa-offers")
 async def get_cpa_offers(request: Request):
-    """Fetches live CPAGrip offers based on client IP"""
+    """Fetches live CPAGrip offers based on client IP with fallback."""
     try:
         # Extract client IP for geo-targeting
         client_ip = request.headers.get("x-forwarded-for", request.client.host)
         if client_ip and "," in client_ip:
             client_ip = client_ip.split(",")[0].strip()
 
-        # Append ip parameter if present
+        # 1. Try fetching offers targeted to user IP
         delimiter = "&" if "?" in CPAGRIP_FEED_URL else "?"
         feed_url = f"{CPAGRIP_FEED_URL}{delimiter}ip={client_ip}" if client_ip else CPAGRIP_FEED_URL
 
         response = requests.get(feed_url, timeout=6)
+        data = response.json() if response.status_code == 200 else {}
 
-        if response.status_code == 200:
-            data = response.json()
-            
-            # CPAGrip can wrap offers inside an 'offers' array or directly as a list
-            raw_offers = data.get("offers", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+        # Parse offers from dictionary or list structure
+        raw_offers = []
+        if isinstance(data, dict):
+            raw_offers = data.get("offers", [])
+        elif isinstance(data, list):
+            raw_offers = data
 
-            formatted_ads = []
-            for offer in raw_offers[:6]:
-                # Extract image and ensure valid HTTPS path
-                img_url = (
-                    offer.get("anchor_image") 
-                    or offer.get("image") 
-                    or offer.get("image_url") 
-                    or offer.get("ad_icon") 
-                    or ""
-                )
+        # 2. Fallback: If no offers returned for client IP, call feed without IP restriction
+        if not raw_offers and client_ip:
+            fallback_resp = requests.get(CPAGRIP_FEED_URL, timeout=6)
+            if fallback_resp.status_code == 200:
+                fallback_data = fallback_resp.json()
+                if isinstance(fallback_data, dict):
+                    raw_offers = fallback_data.get("offers", [])
+                elif isinstance(fallback_data, list):
+                    raw_offers = fallback_data
 
-                # Extract offer destination link
-                offer_link = offer.get("offerlink") or offer.get("link") or offer.get("url") or "#"
-                offer_id = offer.get("offer_id") or offer.get("offerid") or offer.get("id") or ""
+        formatted_ads = []
+        for offer in raw_offers[:6]:
+            img_url = (
+                offer.get("anchor_image") 
+                or offer.get("image") 
+                or offer.get("image_url") 
+                or offer.get("ad_icon") 
+                or ""
+            )
 
-                # Skip invalid or incomplete offer objects
-                if not img_url:
-                    continue
+            offer_link = offer.get("offerlink") or offer.get("link") or offer.get("url") or "#"
+            offer_id = offer.get("offer_id") or offer.get("offerid") or offer.get("id") or ""
 
-                formatted_ads.append({
-                    "id": str(offer_id),
-                    "title": offer.get("title", "Featured Offer"),
-                    "description": offer.get("description", "Complete quick action to support us!"),
-                    "link": offer_link,
-                    "image": img_url
-                })
+            # Standardize custom domain replacement if needed (matching CPAGrip setup)
+            if "www.cpagrip.com" in offer_link:
+                offer_link = offer_link.replace("www.cpagrip.com", "motifiles.com")
 
-            return {"success": True, "ads": formatted_ads}
+            # Fallback placeholder image if CPAGrip sends offer without explicit image
+            if not img_url:
+                img_url = "https://via.placeholder.com/600x200/6c5ce7/ffffff?text=Featured+Offer"
 
-        return {"success": False, "ads": []}
+            formatted_ads.append({
+                "id": str(offer_id),
+                "title": offer.get("title", "Featured Offer"),
+                "description": offer.get("description", "Complete quick action to support us!"),
+                "link": offer_link,
+                "image": img_url
+            })
+
+        return {"success": True, "ads": formatted_ads}
 
     except Exception as e:
         logger.error(f"CPAGrip endpoint error: {e}")
