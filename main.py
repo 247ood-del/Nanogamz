@@ -29,6 +29,12 @@ ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x]
 WEBAPP_URL = os.getenv("WEBAPP_URL")
 RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
 
+# CPAGrip feed URL (from environment)
+CPAGRIP_FEED_URL = os.getenv(
+    "CPAGRIP_FEED_URL",
+    "https://www.cpagrip.com/common/offer_feed_json.php?user_id=YOUR_ID&pubkey=YOUR_KEY"
+)
+
 # --- Supabase & Bot ---
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 bot = Bot(token=BOT_TOKEN)
@@ -198,6 +204,45 @@ async def add_recent_game(request: Request):
     except Exception as e:
         logger.error(f"Error adding recent game: {e}")
         return {"status": "error", "message": str(e)}
+
+# ========== NEW: CPAGrip Live Offers Endpoint ==========
+@app.get("/api/cpa-offers")
+async def get_cpa_offers(request: Request):
+    """Fetches live CPAGrip offers based on client IP"""
+    try:
+        # Get the real player IP for accurate geo-targeting
+        client_ip = request.headers.get("x-forwarded-for", request.client.host)
+        if client_ip and "," in client_ip:
+            client_ip = client_ip.split(",")[0].strip()
+
+        # Build the feed URL with the IP parameter
+        feed_url = f"{CPAGRIP_FEED_URL}&ip={client_ip}"
+
+        response = requests.get(feed_url, timeout=6)
+
+        if response.status_code == 200:
+            data = response.json()
+            # CPAGrip can return a dict with "offers" or a direct list
+            raw_offers = data.get("offers", []) if isinstance(data, dict) else data
+
+            # Clean and map the offers for your front‑end slider
+            formatted_ads = []
+            for offer in raw_offers[:6]:  # Limit to top 6
+                formatted_ads.append({
+                    "id": str(offer.get("offerid", "")),
+                    "title": offer.get("title", "Featured Offer"),
+                    "description": offer.get("description", "Complete quick action to support us!"),
+                    "link": offer.get("link", "#"),
+                    "image": offer.get("anchor_image") or offer.get("image") or "assets/default-ad.png"
+                })
+
+            return {"success": True, "ads": formatted_ads}
+
+        return {"success": False, "ads": []}
+
+    except Exception as e:
+        logger.error(f"CPAGrip error: {e}")
+        return {"success": False, "ads": []}
 
 # --- Bot Handlers ---
 @dp.message(Command("start"))
