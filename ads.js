@@ -16,10 +16,14 @@ export const ADS = [
 
 export async function fetchLiveAds() {
     try {
-        const response = await fetch('/api/cpa-offers');
+        const baseUrl = window.BACKEND_URL || 'https://nanogamz.onrender.com';
+        const response = await fetch(`${baseUrl}/api/cpa-offers`);
+        
+        if (!response.ok) return null;
+
         const result = await response.json();
 
-        if (result.success && result.ads && result.ads.length > 0) {
+        if (result.success && Array.isArray(result.ads) && result.ads.length > 0) {
             return result.ads;
         }
         return null;
