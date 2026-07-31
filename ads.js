@@ -14,11 +14,6 @@ export const ADS = [
     }
 ];
 
-/**
- * Fetches live CPAGrip offers from the backend.
- * Returns an array of ad objects in the same format as ADS,
- * or null if the fetch fails or no offers are available.
- */
 export async function fetchLiveAds() {
     try {
         const response = await fetch('/api/cpa-offers');
