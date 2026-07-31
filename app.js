@@ -1,6 +1,6 @@
 // app.js – Nanogamz main application
 
-import { ADS } from './ads.js';
+import { ADS, fetchLiveAds } from './ads.js';
 
 // ------------------------ CONFIG ------------------------
 // Use the URL set in index.html (or fallback)
@@ -286,13 +286,35 @@ document.querySelectorAll('#themeSegmented .seg-option').forEach(btn => {
 });
 populatePalette('theme');
 
-// ------------------------ AD CAROUSEL ------------------------
-function initAdCarousel() {
-    adWrapper.innerHTML = ADS.map(ad => `
+// ------------------------ AD CAROUSEL (DYNAMIC) ------------------------
+async function initAdCarousel() {
+    // Try to load live ads first
+    let adsToUse = ADS;  // fallback to static ads
+
+    try {
+        const liveAds = await fetchLiveAds();
+        if (liveAds && liveAds.length > 0) {
+            adsToUse = liveAds;
+        }
+    } catch (e) {
+        // silent fallback – keep using ADS
+    }
+
+    // Render slides
+    adWrapper.innerHTML = adsToUse.map(ad => `
         <div class="swiper-slide">
-            <a href="${ad.link}" target="_blank"><img src="${ad.image}" alt="ad" /></a>
+            <a href="${ad.link}" target="_blank" rel="noopener">
+                <img src="${ad.image}" alt="${ad.title || 'ad'}" />
+            </a>
         </div>
     `).join('');
+
+    // Destroy existing Swiper instance if any
+    if (state.swiperAd) {
+        state.swiperAd.destroy(true, true);
+    }
+
+    // Initialize Swiper
     state.swiperAd = new Swiper('#adCarousel', {
         loop: true,
         autoplay: { delay: 4000, disableOnInteraction: false },
@@ -302,6 +324,8 @@ function initAdCarousel() {
         effect: 'slide',
     });
 }
+
+// Call it on load
 initAdCarousel();
 
 // ------------------------ CATEGORY BAR ------------------------
