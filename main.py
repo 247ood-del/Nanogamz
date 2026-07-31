@@ -241,24 +241,26 @@ async def get_cpa_offers(request: Request):
 
         formatted_ads = []
         for offer in raw_offers[:6]:
+            # CPAGrip primarily uses 'creative', 'image', or 'image_url'
             img_url = (
-                offer.get("anchor_image") 
-                or offer.get("image") 
-                or offer.get("image_url") 
-                or offer.get("ad_icon") 
+                offer.get("creative")
+                or offer.get("image")
+                or offer.get("image_url")
+                or offer.get("anchor_image")
+                or offer.get("ad_icon")
                 or ""
             )
 
             offer_link = offer.get("offerlink") or offer.get("link") or offer.get("url") or "#"
             offer_id = offer.get("offer_id") or offer.get("offerid") or offer.get("id") or ""
 
-            # Standardize custom domain replacement if needed (matching CPAGrip setup)
+            # Standardize custom domain replacement
             if "www.cpagrip.com" in offer_link:
                 offer_link = offer_link.replace("www.cpagrip.com", "motifiles.com")
 
-            # Fallback placeholder image if CPAGrip sends offer without explicit image
+            # Fallback to placehold.co (reliable, fast, and CORS-friendly)
             if not img_url:
-                img_url = "https://via.placeholder.com/600x200/6c5ce7/ffffff?text=Featured+Offer"
+                img_url = "https://placehold.co/600x200/6c5ce7/ffffff.png?text=Featured+Offer"
 
             formatted_ads.append({
                 "id": str(offer_id),
