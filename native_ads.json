@@ -1,0 +1,16 @@
+[
+  {
+    "id": "native_1",
+    "title": "Join Nanogamz VIP Club!",
+    "description": "Unlock premium features and ad-free gaming.",
+    "link": "https://t.me/nanogamz",
+    "image": "ads/vip.png"
+  },
+  {
+    "id": "native_2",
+    "title": "Promote Your Game Here",
+    "description": "Reach thousands of daily active gamers.",
+    "link": "https://t.me/nanogamz",
+    "image": "https://placehold.co/600x200/00b894/ffffff.png?text=Promote+Your+App"
+  }
+]
