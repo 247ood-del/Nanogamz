@@ -1,16 +1,12 @@
 [
   {
-    "id": "channel",
     "title": "Join Nanogamz Channel!",
-    "description": "Join our channel.",
     "link": "https://t.me/nanogamz",
     "image": "ads/nanogamz.jpg"
   },
   {
-    "id": "native_2",
-    "title": "Promote Your Game Here",
-    "description": "Reach thousands of daily active gamers.",
-    "link": "https://t.me/nanogamz",
-    "image": "https://placehold.co/600x200/00b894/ffffff.png?text=Promote+Your+App"
+    "title": "stake.com"
+    "link": "https://stake.com/?c=hcYKazFc",
+    "image": "ads/stake.jpg"
   }
 ]
