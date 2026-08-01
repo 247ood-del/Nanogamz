@@ -1,10 +1,10 @@
 [
   {
-    "id": "native_1",
-    "title": "Join Nanogamz VIP Club!",
-    "description": "Unlock premium features and ad-free gaming.",
+    "id": "channel",
+    "title": "Join Nanogamz Channel!",
+    "description": "Join our channel.",
     "link": "https://t.me/nanogamz",
-    "image": "ads/vip.png"
+    "image": "ads/nanogamz.jpg"
   },
   {
     "id": "native_2",
