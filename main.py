@@ -241,9 +241,10 @@ async def get_cpa_offers(request: Request):
 
         formatted_ads = []
         for offer in raw_offers[:6]:
-            # CPAGrip specific image keys (creative & mobile_icon are standard for CPAGrip)
+            # CPAGrip uses 'offerphoto' for offer thumbnails – added as first priority
             img_url = (
-                offer.get("creative")
+                offer.get("offerphoto")
+                or offer.get("creative")
                 or offer.get("mobile_icon")
                 or offer.get("image")
                 or offer.get("image_url")
