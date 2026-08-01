@@ -41,29 +41,49 @@ CPAGRIP_FEED_URL = os.getenv(
 NATIVE_ADS_FILE = os.path.join(os.path.dirname(__file__), "native_ads.json")
 
 def load_native_ads():
-    """Load native ads from JSON file, or return fallback if file missing/invalid."""
+    """Load native ads from JSON file – expects each item to have 'image' and 'link'.
+       'title' is optional; falls back to 'Featured' if missing.
+       Invalid entries (missing image/link) are skipped.
+    """
     try:
         with open(NATIVE_ADS_FILE, "r", encoding="utf-8") as f:
-            ads = json.load(f)
-            if isinstance(ads, list) and len(ads) > 0:
+            raw_ads = json.load(f)
+            if not isinstance(raw_ads, list):
+                raise ValueError("Expected a list")
+            ads = []
+            for item in raw_ads:
+                image = item.get("image")
+                link = item.get("link")
+                if not image or not link:
+                    logger.warning(f"Skipping ad: missing image or link - {item}")
+                    continue
+                ads.append({
+                    "id": item.get("id", f"native_{len(ads)}"),
+                    "title": item.get("title", "Featured"),
+                    "image": image,
+                    "link": link,
+                    "description": item.get("description", "")
+                })
+            if ads:
                 return ads
     except Exception as e:
         logger.warning(f"Could not load native_ads.json: {e}. Using fallback.")
-    # Fallback hardcoded ads (replace with your own if you like)
+    
+    # Fallback hardcoded ads (simplified)
     return [
         {
             "id": "native_1",
             "title": "Join Nanogamz VIP Club!",
-            "description": "Unlock premium features and ad-free gaming.",
+            "image": "ads/VIP.png",
             "link": "https://t.me/nanogamz",
-            "image": "ads/vip.png"  # example local path
+            "description": ""
         },
         {
             "id": "native_2",
             "title": "Promote Your Game Here",
-            "description": "Reach thousands of daily active gamers.",
+            "image": "https://placehold.co/600x200/00b894/ffffff.png?text=Promote+Your+App",
             "link": "https://t.me/nanogamz",
-            "image": "https://placehold.co/600x200/00b894/ffffff.png?text=Promote+Your+App"
+            "description": ""
         }
     ]
 
@@ -189,7 +209,7 @@ async def toggle_save_game(request: Request):
         logger.error(f"Error toggling saved game: {e}")
         return {"status": "error", "message": str(e)}
 
-# --- Recent Games Endpoints (NEW) ---
+# --- Recent Games Endpoints ---
 @app.get("/recent-games")
 async def get_recent_games(telegram_id: int):
     try:
@@ -243,12 +263,12 @@ async def add_recent_game(request: Request):
         logger.error(f"Error adding recent game: {e}")
         return {"status": "error", "message": str(e)}
 
-# ========== CPAGrip + Native Hybrid Offers Endpoint (UPDATED) ==========
+# ========== CPAGrip + Native Hybrid Offers Endpoint ==========
 @app.get("/api/cpa-offers")
 async def get_cpa_offers(request: Request):
     """Fetches live CPAGrip offers mixed intelligently with custom native ads from JSON file."""
     try:
-        # Load native ads fresh from file each request (so you can update without restart)
+        # Load native ads fresh from file each request
         native_ads = load_native_ads()
 
         # Convert any local image paths to absolute URLs
@@ -256,7 +276,6 @@ async def get_cpa_offers(request: Request):
         for ad in native_ads:
             img = ad.get("image", "")
             if img and not img.startswith("http://") and not img.startswith("https://"):
-                # treat as local path, ensure it starts with "/" if needed
                 if img.startswith("/"):
                     img = img[1:]
                 ad["image"] = f"{base_url}/{img}"
@@ -315,9 +334,9 @@ async def get_cpa_offers(request: Request):
             cpa_ads.append({
                 "id": f"cpa_{offer_id}",
                 "title": offer_title,
-                "description": offer.get("description", "Complete quick action to support us!"),
                 "link": offer_link,
-                "image": img_url
+                "image": img_url,
+                "description": offer.get("description", "")
             })
 
         # 2. Hybrid mixing & Fallback strategy
@@ -352,7 +371,7 @@ async def get_cpa_offers(request: Request):
                 ad["image"] = f"{base_url}/{img}"
         return {"success": True, "ads": native_ads}
 
-# --- Bot Handlers ---
+# --- Bot Handlers (unchanged) ---
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     logger.info(f"/start from user {message.from_user.id}")
@@ -401,12 +420,7 @@ async def admin_check_broken(callback: types.CallbackQuery):
 _sync_lock = asyncio.Lock()
 
 async def run_sync_and_notify(chat_id: int, message_id: int):
-    """
-    Fetch games from GamePix, bulk insert only new ones (skip existing),
-    then edit the original message with the result.
-    """
     try:
-        # Prevent concurrent syncs
         if _sync_lock.locked():
             await bot.edit_message_text(
                 chat_id=chat_id,
@@ -416,7 +430,6 @@ async def run_sync_and_notify(chat_id: int, message_id: int):
             return
 
         async with _sync_lock:
-            # Fetch all games from GamePix (blocking I/O)
             games = await asyncio.to_thread(sync_games.fetch_gamepix_games)
             if not games:
                 await bot.edit_message_text(
@@ -426,12 +439,10 @@ async def run_sync_and_notify(chat_id: int, message_id: int):
                 )
                 return
 
-            # Insert only new games (bulk) – no duplicates, no upsert
             inserted = await asyncio.to_thread(
                 sync_games.insert_new_games, supabase, games
             )
 
-            # Report how many new games were added
             await bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=message_id,
@@ -450,18 +461,14 @@ async def run_sync_and_notify(chat_id: int, message_id: int):
 
 @dp.callback_query(F.data == "admin_sync_games")
 async def admin_sync_games(callback: types.CallbackQuery):
-    # Acknowledge immediately and show progress
     await callback.answer("Sync started...")
     chat_id = callback.message.chat.id
     message_id = callback.message.message_id
     await callback.message.edit_text("🔄 Syncing games from GamePix, please wait...")
-
-    # Launch background task – it will edit the message when done
     asyncio.create_task(run_sync_and_notify(chat_id, message_id))
 
-# ========== WEBHOOK SETUP (async) ==========
+# ========== WEBHOOK SETUP ==========
 async def set_webhook_async():
-    """Set the webhook asynchronously."""
     if not RENDER_EXTERNAL_URL:
         logger.warning("RENDER_EXTERNAL_URL not set; webhook will not be set.")
         return
@@ -482,20 +489,15 @@ async def set_webhook_async():
     except Exception as e:
         logger.error(f"Failed to set webhook: {e}")
 
-# ========== STARTUP EVENTS ==========
 @app.on_event("startup")
 async def startup():
-    # 1. Set webhook (async)
     await set_webhook_async()
-
-    # 2. Start the background pinger (unchanged)
     def start_pinger():
         ping.run_pinger()
     thread = threading.Thread(target=start_pinger, daemon=True)
     thread.start()
     logger.info("Background pinger started")
 
-# --- For local testing ---
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8080)
