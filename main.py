@@ -241,16 +241,17 @@ async def get_cpa_offers(request: Request):
 
         formatted_ads = []
         for offer in raw_offers[:6]:
-            # CPAGrip primarily uses 'creative', 'image', or 'image_url'
+            # CPAGrip specific image keys (creative & mobile_icon are standard for CPAGrip)
             img_url = (
                 offer.get("creative")
+                or offer.get("mobile_icon")
                 or offer.get("image")
                 or offer.get("image_url")
                 or offer.get("anchor_image")
-                or offer.get("ad_icon")
                 or ""
             )
 
+            offer_title = offer.get("title", "Featured Offer")
             offer_link = offer.get("offerlink") or offer.get("link") or offer.get("url") or "#"
             offer_id = offer.get("offer_id") or offer.get("offerid") or offer.get("id") or ""
 
@@ -258,13 +259,14 @@ async def get_cpa_offers(request: Request):
             if "www.cpagrip.com" in offer_link:
                 offer_link = offer_link.replace("www.cpagrip.com", "motifiles.com")
 
-            # Fallback to placehold.co (reliable, fast, and CORS-friendly)
+            # Dynamic fallback: Uses the SPECIFIC offer title if CPAGrip didn't include a banner
             if not img_url:
-                img_url = "https://placehold.co/600x200/6c5ce7/ffffff.png?text=Featured+Offer"
+                encoded_title = requests.utils.quote(offer_title)
+                img_url = f"https://placehold.co/600x200/6c5ce7/ffffff.png?text={encoded_title}"
 
             formatted_ads.append({
                 "id": str(offer_id),
-                "title": offer.get("title", "Featured Offer"),
+                "title": offer_title,
                 "description": offer.get("description", "Complete quick action to support us!"),
                 "link": offer_link,
                 "image": img_url
