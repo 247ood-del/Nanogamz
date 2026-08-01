@@ -1,10 +1,12 @@
 import os
+import json
 import logging
 import asyncio
 import threading
 import random
 from fastapi import FastAPI, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
@@ -35,6 +37,36 @@ CPAGRIP_FEED_URL = os.getenv(
     "https://www.cpagrip.com/common/offer_feed_json.php?user_id=YOUR_ID&pubkey=YOUR_KEY"
 )
 
+# --- Native / House Ads Configuration (from file or fallback) ---
+NATIVE_ADS_FILE = os.path.join(os.path.dirname(__file__), "native_ads.json")
+
+def load_native_ads():
+    """Load native ads from JSON file, or return fallback if file missing/invalid."""
+    try:
+        with open(NATIVE_ADS_FILE, "r", encoding="utf-8") as f:
+            ads = json.load(f)
+            if isinstance(ads, list) and len(ads) > 0:
+                return ads
+    except Exception as e:
+        logger.warning(f"Could not load native_ads.json: {e}. Using fallback.")
+    # Fallback hardcoded ads (replace with your own if you like)
+    return [
+        {
+            "id": "native_1",
+            "title": "Join Nanogamz VIP Club!",
+            "description": "Unlock premium features and ad-free gaming.",
+            "link": "https://t.me/nanogamz",
+            "image": "ads/vip.png"  # example local path
+        },
+        {
+            "id": "native_2",
+            "title": "Promote Your Game Here",
+            "description": "Reach thousands of daily active gamers.",
+            "link": "https://t.me/nanogamz",
+            "image": "https://placehold.co/600x200/00b894/ffffff.png?text=Promote+Your+App"
+        }
+    ]
+
 # --- Supabase & Bot ---
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 bot = Bot(token=BOT_TOKEN)
@@ -48,6 +80,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# --- Mount static folder for local ads ---
+if os.path.exists("ads"):
+    app.mount("/ads", StaticFiles(directory="ads"), name="ads")
+else:
+    logger.warning("ads folder not found – local images won't be served")
 
 # --- Include webhook router ---
 app.include_router(create_webhook_router(bot, dp))
@@ -205,31 +243,43 @@ async def add_recent_game(request: Request):
         logger.error(f"Error adding recent game: {e}")
         return {"status": "error", "message": str(e)}
 
-# ========== CPAGrip Live Offers Endpoint (UPDATED) ==========
+# ========== CPAGrip + Native Hybrid Offers Endpoint (UPDATED) ==========
 @app.get("/api/cpa-offers")
 async def get_cpa_offers(request: Request):
-    """Fetches live CPAGrip offers based on client IP with fallback."""
+    """Fetches live CPAGrip offers mixed intelligently with custom native ads from JSON file."""
     try:
+        # Load native ads fresh from file each request (so you can update without restart)
+        native_ads = load_native_ads()
+
+        # Convert any local image paths to absolute URLs
+        base_url = str(request.base_url).rstrip('/')
+        for ad in native_ads:
+            img = ad.get("image", "")
+            if img and not img.startswith("http://") and not img.startswith("https://"):
+                # treat as local path, ensure it starts with "/" if needed
+                if img.startswith("/"):
+                    img = img[1:]
+                ad["image"] = f"{base_url}/{img}"
+
         # Extract client IP for geo-targeting
         client_ip = request.headers.get("x-forwarded-for", request.client.host)
         if client_ip and "," in client_ip:
             client_ip = client_ip.split(",")[0].strip()
 
-        # 1. Try fetching offers targeted to user IP
+        # 1. Fetch CPAGrip offers
         delimiter = "&" if "?" in CPAGRIP_FEED_URL else "?"
         feed_url = f"{CPAGRIP_FEED_URL}{delimiter}ip={client_ip}" if client_ip else CPAGRIP_FEED_URL
 
         response = requests.get(feed_url, timeout=6)
         data = response.json() if response.status_code == 200 else {}
 
-        # Parse offers from dictionary or list structure
         raw_offers = []
         if isinstance(data, dict):
             raw_offers = data.get("offers", [])
         elif isinstance(data, list):
             raw_offers = data
 
-        # 2. Fallback: If no offers returned for client IP, call feed without IP restriction
+        # Fallback to no-IP feed if needed
         if not raw_offers and client_ip:
             fallback_resp = requests.get(CPAGRIP_FEED_URL, timeout=6)
             if fallback_resp.status_code == 200:
@@ -239,9 +289,8 @@ async def get_cpa_offers(request: Request):
                 elif isinstance(fallback_data, list):
                     raw_offers = fallback_data
 
-        formatted_ads = []
-        for offer in raw_offers[:6]:
-            # CPAGrip uses 'offerphoto' for offer thumbnails – added as first priority
+        cpa_ads = []
+        for offer in raw_offers:
             img_url = (
                 offer.get("offerphoto")
                 or offer.get("creative")
@@ -256,28 +305,52 @@ async def get_cpa_offers(request: Request):
             offer_link = offer.get("offerlink") or offer.get("link") or offer.get("url") or "#"
             offer_id = offer.get("offer_id") or offer.get("offerid") or offer.get("id") or ""
 
-            # Standardize custom domain replacement
             if "www.cpagrip.com" in offer_link:
                 offer_link = offer_link.replace("www.cpagrip.com", "motifiles.com")
 
-            # Dynamic fallback: Uses the SPECIFIC offer title if CPAGrip didn't include a banner
             if not img_url:
                 encoded_title = requests.utils.quote(offer_title)
                 img_url = f"https://placehold.co/600x200/6c5ce7/ffffff.png?text={encoded_title}"
 
-            formatted_ads.append({
-                "id": str(offer_id),
+            cpa_ads.append({
+                "id": f"cpa_{offer_id}",
                 "title": offer_title,
                 "description": offer.get("description", "Complete quick action to support us!"),
                 "link": offer_link,
                 "image": img_url
             })
 
-        return {"success": True, "ads": formatted_ads}
+        # 2. Hybrid mixing & Fallback strategy
+        final_ads = []
+
+        if cpa_ads:
+            # Insert a native ad every 2 CPAGrip ads (or mix them)
+            native_idx = 0
+            for i, cpa_ad in enumerate(cpa_ads[:6]):
+                final_ads.append(cpa_ad)
+                # Inject a native house ad after every 2 CPA offers
+                if (i + 1) % 2 == 0 and native_ads:
+                    final_ads.append(native_ads[native_idx % len(native_ads)])
+                    native_idx += 1
+        else:
+            # FALLBACK: If CPAGrip completely fails, serve 100% native house ads
+            final_ads = native_ads
+
+        return {"success": True, "ads": final_ads[:6]}
 
     except Exception as e:
-        logger.error(f"CPAGrip endpoint error: {e}")
-        return {"success": False, "ads": []}
+        logger.error(f"CPA/Native endpoint error: {e}")
+        # Absolute fallback to native ads on exception
+        native_ads = load_native_ads()
+        # Convert paths again
+        base_url = str(request.base_url).rstrip('/')
+        for ad in native_ads:
+            img = ad.get("image", "")
+            if img and not img.startswith("http://") and not img.startswith("https://"):
+                if img.startswith("/"):
+                    img = img[1:]
+                ad["image"] = f"{base_url}/{img}"
+        return {"success": True, "ads": native_ads}
 
 # --- Bot Handlers ---
 @dp.message(Command("start"))
