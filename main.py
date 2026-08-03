@@ -87,6 +87,33 @@ def load_native_ads():
         }
     ]
 
+# --- Helper function to extract image URL from offer dict adaptively ---
+def extract_adaptive_image(offer: dict) -> str:
+    """Recursively checks for common image key names or any URL ending in standard image extensions."""
+    # 1. Preferred keys list in order of priority
+    preferred_keys = [
+        "offerphoto", "creative", "mobile_icon", "image", 
+        "image_url", "anchor_image", "picture", "banner", "thumbnail"
+    ]
+    
+    for key in preferred_keys:
+        val = offer.get(key)
+        if val and isinstance(val, str) and val.startswith("http"):
+            return val
+
+    # 2. Dynamic Fallback: Loop through all keys to find any key with 'img'/'photo'/'icon'
+    # or any value pointing to an image file format
+    for k, v in offer.items():
+        if isinstance(v, str) and v.startswith("http"):
+            key_lower = k.lower()
+            val_lower = v.lower()
+            if any(term in key_lower for term in ["img", "image", "photo", "icon", "creative", "banner"]):
+                return v
+            if any(val_lower.endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".gif", ".webp"]):
+                return v
+
+    return ""
+
 # --- Supabase & Bot ---
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 bot = Bot(token=BOT_TOKEN)
@@ -310,15 +337,8 @@ async def get_cpa_offers(request: Request):
 
         cpa_ads = []
         for offer in raw_offers:
-            img_url = (
-                offer.get("offerphoto")
-                or offer.get("creative")
-                or offer.get("mobile_icon")
-                or offer.get("image")
-                or offer.get("image_url")
-                or offer.get("anchor_image")
-                or ""
-            )
+            # Use the adaptive helper to extract image URL
+            img_url = extract_adaptive_image(offer)
 
             offer_title = offer.get("title", "Featured Offer")
             offer_link = offer.get("offerlink") or offer.get("link") or offer.get("url") or "#"
@@ -327,6 +347,7 @@ async def get_cpa_offers(request: Request):
             if "www.cpagrip.com" in offer_link:
                 offer_link = offer_link.replace("www.cpagrip.com", "motifiles.com")
 
+            # Final fallback only if no valid image string could be dynamically located
             if not img_url:
                 encoded_title = requests.utils.quote(offer_title)
                 img_url = f"https://placehold.co/600x200/6c5ce7/ffffff.png?text={encoded_title}"
