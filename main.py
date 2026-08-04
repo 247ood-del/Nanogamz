@@ -4,6 +4,7 @@ import logging
 import asyncio
 import threading
 import random
+import httpx  # <-- added for async HTTP requests
 from fastapi import FastAPI, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -418,24 +419,73 @@ async def cmd_admin(message: types.Message):
     ])
     await message.answer("🛠 Admin Panel", reply_markup=keyboard)
 
+# ---------- NEW BROKEN LINK CHECK (async background) ----------
+_check_lock = asyncio.Lock()
+
+async def run_check_broken_and_notify(chat_id: int, message_id: int):
+    if _check_lock.locked():
+        await bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text="⏳ A broken link check is already in progress. Please wait..."
+        )
+        return
+
+    async with _check_lock:
+        try:
+            games = supabase.table("games").select("id, playable_url").execute()
+            broken = []
+
+            # Use asynchronous HTTP client to avoid blocking the event loop
+            async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as client:
+                for game in games.data:
+                    url = game.get("playable_url")
+                    if not url:
+                        broken.append(game["id"])
+                        continue
+                    try:
+                        resp = await client.head(url)
+                        if resp.status_code >= 400:
+                            # Fallback GET check if HEAD is unsupported by source host
+                            resp_get = await client.get(url)
+                            if resp_get.status_code >= 400:
+                                broken.append(game["id"])
+                    except Exception:
+                        broken.append(game["id"])
+
+            if broken:
+                for gid in broken:
+                    supabase.table("games").delete().eq("id", gid).execute()
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=f"🗑 Deleted {len(broken)} broken games from the database."
+                )
+            else:
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text="✅ All game links are reachable."
+                )
+        except Exception as e:
+            logger.error(f"Broken links check error: {e}", exc_info=True)
+            try:
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=f"❌ Error during check: {str(e)[:200]}"
+                )
+            except Exception:
+                pass
+
 @dp.callback_query(F.data == "admin_check_broken")
 async def admin_check_broken(callback: types.CallbackQuery):
-    await callback.answer("Checking...")
-    games = supabase.table("games").select("id, playable_url").execute()
-    broken = []
-    for game in games.data:
-        try:
-            resp = requests.head(game["playable_url"], timeout=5)
-            if resp.status_code >= 400:
-                broken.append(game["id"])
-        except:
-            broken.append(game["id"])
-    if broken:
-        for gid in broken:
-            supabase.table("games").delete().eq("id", gid).execute()
-        await callback.message.edit_text(f"🗑 Deleted {len(broken)} broken games.")
-    else:
-        await callback.message.edit_text("✅ All games are reachable.")
+    await callback.answer("Link check initiated...")
+    chat_id = callback.message.chat.id
+    message_id = callback.message.message_id
+    await callback.message.edit_text("🔍 Checking broken links in background, please wait...")
+    asyncio.create_task(run_check_broken_and_notify(chat_id, message_id))
+# ---------- END NEW BROKEN LINK CHECK ----------
 
 # --- Sync lock and background task ---
 _sync_lock = asyncio.Lock()
