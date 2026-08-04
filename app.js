@@ -579,7 +579,20 @@ async function fetchUserSavedGameIds() {
     }
 }
 
-// Update openGame function to record game open event in Supabase
+// ==================== PILL POSITION RESET ====================
+function resetPillPosition() {
+    const pill = document.querySelector('.game-control-pill');
+    if (!pill) return;
+
+    // Clear inline drag offsets
+    pill.style.left = '';
+    pill.style.top = '';
+
+    // Re-apply default right alignment specified in CSS
+    pill.style.right = '';
+}
+
+// ==================== OPEN / CLOSE GAME MODAL ====================
 async function openGame(game) {
     if (!game || !game.playable_url) {
         alert("Game URL not found. Please try again.");
@@ -604,14 +617,20 @@ async function openGame(game) {
     }
 }
 
-modalClose.addEventListener('click', () => {
+function closeGameModal() {
     gameModal.classList.remove('active');
     gameIframe.src = '';
-});
+    
+    // Reset the control pill position back to default
+    resetPillPosition();
+}
+
+// Attach the updated handler to all closing events
+modalClose.addEventListener('click', closeGameModal);
+
 gameModal.addEventListener('click', (e) => {
     if (e.target === gameModal) {
-        gameModal.classList.remove('active');
-        gameIframe.src = '';
+        closeGameModal();
     }
 });
 
