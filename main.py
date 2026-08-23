@@ -454,11 +454,13 @@ if os.getenv("BOT_TOKEN"):
         await callback.message.edit_text("🔄 Syncing games from GamePix, please wait...")
         asyncio.create_task(run_sync_and_notify(chat_id, message_id))
 
-    # ======================== WEBHOOK ROUTES (fixed) ========================
+    # ======================== WEBHOOK ROUTES (FIXED) ========================
 
-    @app.post("/api/telegram-webhook")
+    @app.api_route("/api/telegram-webhook", methods=["GET", "POST"])
     async def telegram_webhook(request: Request):
-        """Handle incoming Telegram updates (POST)."""
+        """Handle incoming Telegram updates (accepts both GET and POST)."""
+        if request.method == "GET":
+            return {"status": "Webhook endpoint is active"}
         try:
             body = await request.body()
             body_str = body.decode('utf-8')
