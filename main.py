@@ -301,11 +301,8 @@ async def get_cpa_offers(request: Request):
                 ad["image"] = f"{base_url}/{img}"
         return {"success": True, "ads": native_ads}
 
-# ---- Serve static files (must be AFTER all API routes) ----
-app.mount("/", StaticFiles(directory=os.path.dirname(__file__), html=True), name="static")
-
 # =============================================================================
-#  BOT & WEBHOOK – ONLY ENABLED IF BOT_TOKEN IS SET (i.e., on Render)
+#  BOT & WEBHOOK – DEFINED BEFORE THE ROOT STATIC MOUNT TO AVOID OVERRIDING
 # =============================================================================
 if os.getenv("BOT_TOKEN"):
     from aiogram import Bot, Dispatcher, types, F
@@ -454,7 +451,7 @@ if os.getenv("BOT_TOKEN"):
         await callback.message.edit_text("🔄 Syncing games from GamePix, please wait...")
         asyncio.create_task(run_sync_and_notify(chat_id, message_id))
 
-    # ======================== WEBHOOK ROUTES (FIXED) ========================
+    # ======================== WEBHOOK ROUTES ========================
 
     @app.api_route("/api/telegram-webhook", methods=["GET", "POST"])
     async def telegram_webhook(request: Request):
@@ -533,4 +530,6 @@ if os.getenv("BOT_TOKEN"):
         thread = threading.Thread(target=start_pinger, daemon=True)
         thread.start()
         logger.info("Background pinger started")
-        
+
+# ---- Serve static files (MUST BE LAST - catches any unmatched routes) ----
+app.mount("/", StaticFiles(directory=os.path.dirname(__file__), html=True), name="static")
