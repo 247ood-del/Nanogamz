@@ -76,6 +76,19 @@ async def get_games(
     except Exception as e:
         return {"error": str(e)}, 500
 
+# NEW: Fetch a single game by ID
+@app.get("/game/{game_id}")
+async def get_game_by_id(game_id: str):
+    """Fetch a single game by its ID."""
+    try:
+        result = supabase.table("games").select("*").eq("id", game_id).execute()
+        if not result.data:
+            return {"error": "Game not found"}, 404
+        return result.data[0]
+    except Exception as e:
+        logger.error(f"Error fetching game {game_id}: {e}")
+        return {"error": str(e)}, 500
+
 @app.get("/saved-games")
 async def get_saved_games(
     telegram_id: int,
