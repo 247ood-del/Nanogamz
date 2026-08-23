@@ -149,7 +149,8 @@
 
 <!-- 🔽 SET YOUR BACKEND URL HERE 🔽 -->
 <script>
-    window.BACKEND_URL = 'https://nanogamz.onrender.com';   // <-- CHANGE THIS
+    // Use the same origin as the frontend (Vercel) for all API calls.
+    window.BACKEND_URL = window.location.origin;
 </script>
 
 <script src="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.js"></script>
