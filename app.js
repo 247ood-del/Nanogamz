@@ -134,6 +134,8 @@ const savedGrid = document.getElementById('savedGrid');
 const savedGridContainer = document.getElementById('savedGridContainer');
 // NEW: refresh button inside saved overlay
 const refreshSavedBtn = document.getElementById('refreshSavedBtn');
+// NEW: share button
+const shareBtn = document.getElementById('shareBtn');
 
 // ------------------------ SEARCH PANEL ------------------------
 const searchPanel = document.getElementById('searchPanel');
@@ -780,6 +782,81 @@ saveBtn.addEventListener('click', async (e) => {
     }
 });
 
+// ==================== SHARE GAME (NEW) ====================
+const BOT_USERNAME = 'Nanogamz_bot'; // your bot's username without @
+
+shareBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!activeModalGame) {
+        showToast('No game loaded to share.', 'error');
+        return;
+    }
+    const gameId = activeModalGame.id;
+    shareGame(gameId);
+});
+
+async function shareGame(gameId) {
+    // Build the deep link: t.me/bot?startapp=gameId
+    const deepLink = `https://t.me/${BOT_USERNAME}?startapp=${gameId}`;
+
+    // Use Telegram's native share dialog if available
+    if (window.Telegram && Telegram.WebApp && Telegram.WebApp.openTelegramLink) {
+        // We want to share the link itself; we can use a direct message with the link.
+        // Better: use the share URL method to let user pick a chat.
+        const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(deepLink)}&text=${encodeURIComponent('🎮 Check out this game on Nanogamz!')}`;
+        Telegram.WebApp.openTelegramLink(shareUrl);
+    } else {
+        // Fallback: copy to clipboard with a toast
+        try {
+            await navigator.clipboard.writeText(deepLink);
+            showToast('✅ Game link copied to clipboard!', 'success', 2000);
+        } catch (err) {
+            console.error('Copy failed', err);
+            showToast('Failed to copy link. Please copy manually.', 'error');
+        }
+    }
+}
+
+// ==================== DEEP LINK HANDLER (NEW) ====================
+// When the app is opened via a shared link with ?startapp=GAME_ID,
+// automatically load that game.
+async function handleDeepLink() {
+    if (!window.Telegram || !Telegram.WebApp) return;
+    const startParam = Telegram.WebApp.initDataUnsafe?.start_param;
+    if (!startParam) return;
+
+    // startParam is the game ID passed in the link
+    try {
+        const game = await fetchGameById(startParam);
+        if (game) {
+            // Wait a moment for the UI to settle, then open the game
+            setTimeout(() => {
+                openGame(game);
+            }, 500);
+        } else {
+            showToast('Game not found.', 'error');
+        }
+    } catch (err) {
+        console.error('Deep link error:', err);
+        showToast('Failed to load shared game.', 'error');
+    }
+}
+
+// ------------------------ FETCH GAME BY ID (NEW) ------------------------
+async function fetchGameById(gameId) {
+    try {
+        const resp = await fetch(`${BACKEND_URL}/game/${gameId}`);
+        if (!resp.ok) {
+            if (resp.status === 404) return null;
+            throw new Error('Network error');
+        }
+        return await resp.json();
+    } catch (err) {
+        console.error('fetchGameById error:', err);
+        return null;
+    }
+}
+
 // ==================== DRAGGABLE CONTROL PILL LOGIC ====================
 const pill = document.querySelector('.game-control-pill');
 
@@ -948,8 +1025,6 @@ async function loadSavedGames(reset = false) {
                         savedGrid.innerHTML = '<div class="saved-empty-state">No games saved yet</div>';
                     }
                     showToast('Game removed from saved.', 'success');
-                    // 🔥 FIX #1: also refresh the main grid's saved state? Not needed, but we can keep consistency
-                    // However, the main grid doesn't show saved status, so it's fine.
                 } catch (err) {
                     showToast('Failed to remove game.', 'error');
                 }
@@ -1014,3 +1089,6 @@ savedGridContainer.addEventListener('scroll', () => {
 loadGames(true);
 // Initial render of recent games (will be refreshed when menu opens)
 renderRecentGames();
+
+// ------------------------ DEEP LINK HANDLER (run after load) ------------------------
+handleDeepLink();
