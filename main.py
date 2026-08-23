@@ -16,11 +16,6 @@ from typing import Optional
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ---- Environment detection ----
-IS_RENDER = bool(os.getenv("RENDER"))  # set this env var on Render
-# Alternatively, check for RENDER_EXTERNAL_URL
-IS_RENDER = IS_RENDER or bool(os.getenv("RENDER_EXTERNAL_URL"))
-
 # ---- Config (common) ----
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -45,7 +40,7 @@ app.add_middleware(
 if os.path.exists("ads"):
     app.mount("/ads", StaticFiles(directory="ads"), name="ads")
 else:
-    logger.warning("ads folder not found")
+    logger.warning("ads folder not found – local images won't be served")
 
 # ---- Public API endpoints (run on both Vercel and Render) ----
 
@@ -82,7 +77,11 @@ async def get_games(
         return {"error": str(e)}, 500
 
 @app.get("/saved-games")
-async def get_saved_games(telegram_id: int, limit: int = 20, offset: int = 0):
+async def get_saved_games(
+    telegram_id: int,
+    limit: int = 20,
+    offset: int = 0
+):
     try:
         user_res = supabase.table("users").select("saved_games").eq("telegram_id", telegram_id).execute()
         if not user_res.data or not user_res.data[0].get("saved_games"):
@@ -303,12 +302,12 @@ async def get_cpa_offers(request: Request):
         return {"success": True, "ads": native_ads}
 
 # ---- Serve static files (must be AFTER all API routes) ----
-app.mount("/", StaticFiles(directory=".", html=True), name="static")
+app.mount("/", StaticFiles(directory=os.path.dirname(__file__), html=True), name="static")
 
 # =============================================================================
-#  BOT & WEBHOOK – ONLY ENABLED ON RENDER
+#  BOT & WEBHOOK – ONLY ENABLED IF BOT_TOKEN IS SET (i.e., on Render)
 # =============================================================================
-if IS_RENDER:
+if os.getenv("BOT_TOKEN"):
     from aiogram import Bot, Dispatcher, types, F
     from aiogram.filters import Command
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
@@ -319,110 +318,106 @@ if IS_RENDER:
     WEBAPP_URL = os.getenv("WEBAPP_URL")
     RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
 
-    if not BOT_TOKEN:
-        logger.error("BOT_TOKEN not set. Bot disabled.")
-    else:
-        bot = Bot(token=BOT_TOKEN)
-        dp = Dispatcher()
+    bot = Bot(token=BOT_TOKEN)
+    dp = Dispatcher()
 
-        # ---- Bot handlers ----
-        @dp.message(Command("start"))
-        async def cmd_start(message: types.Message):
-            logger.info(f"/start from user {message.from_user.id}")
-            user = message.from_user
-            user_data = {"telegram_id": user.id, "username": user.username or ""}
-            supabase.table("users").upsert(user_data).execute()
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🎮 Play Nanogamz", web_app=WebAppInfo(url=WEBAPP_URL))],
-                [InlineKeyboardButton(text="📢 Channel", url="https://t.me/nanogamz")]
-            ])
-            await message.answer(
-                "🎮 **Welcome to Nanogamz!**\n\nYour go‑to hub for instant HTML5 games.\nClick the button below to start playing!",
-                reply_markup=keyboard,
-                parse_mode="Markdown"
+    @dp.message(Command("start"))
+    async def cmd_start(message: types.Message):
+        logger.info(f"/start from user {message.from_user.id}")
+        user = message.from_user
+        user_data = {"telegram_id": user.id, "username": user.username or ""}
+        supabase.table("users").upsert(user_data).execute()
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🎮 Play Nanogamz", web_app=WebAppInfo(url=WEBAPP_URL))],
+            [InlineKeyboardButton(text="📢 Channel", url="https://t.me/nanogamz")]
+        ])
+        await message.answer(
+            "🎮 **Welcome to Nanogamz!**\n\nYour go‑to hub for instant HTML5 games.\nClick the button below to start playing!",
+            reply_markup=keyboard,
+            parse_mode="Markdown"
+        )
+
+    @dp.message(Command("admin"), F.from_user.id.in_(ADMIN_IDS))
+    async def cmd_admin(message: types.Message):
+        logger.info(f"/admin from admin user {message.from_user.id}")
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔍 Check Broken Links", callback_data="admin_check_broken")],
+            [InlineKeyboardButton(text="🔄 Sync Games Now", callback_data="admin_sync_games")]
+        ])
+        await message.answer("🛠 Admin Panel", reply_markup=keyboard)
+
+    _check_lock = asyncio.Lock()
+    _sync_lock = asyncio.Lock()
+
+    async def run_check_broken_and_notify(chat_id: int, message_id: int):
+        if _check_lock.locked():
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text="⏳ A broken link check is already in progress. Please wait..."
             )
-
-        @dp.message(Command("admin"), F.from_user.id.in_(ADMIN_IDS))
-        async def cmd_admin(message: types.Message):
-            logger.info(f"/admin from admin user {message.from_user.id}")
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔍 Check Broken Links", callback_data="admin_check_broken")],
-                [InlineKeyboardButton(text="🔄 Sync Games Now", callback_data="admin_sync_games")]
-            ])
-            await message.answer("🛠 Admin Panel", reply_markup=keyboard)
-
-        # ---- Background task locks ----
-        _check_lock = asyncio.Lock()
-        _sync_lock = asyncio.Lock()
-
-        async def run_check_broken_and_notify(chat_id: int, message_id: int):
-            if _check_lock.locked():
-                await bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    text="⏳ A broken link check is already in progress. Please wait..."
-                )
-                return
-            async with _check_lock:
+            return
+        async with _check_lock:
+            try:
+                games = supabase.table("games").select("id, playable_url").execute()
+                broken = []
+                async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as client:
+                    for game in games.data:
+                        url = game.get("playable_url")
+                        if not url:
+                            broken.append(game["id"])
+                            continue
+                        try:
+                            resp = await client.head(url)
+                            if resp.status_code >= 400:
+                                resp_get = await client.get(url)
+                                if resp_get.status_code >= 400:
+                                    broken.append(game["id"])
+                        except Exception:
+                            broken.append(game["id"])
+                if broken:
+                    for gid in broken:
+                        supabase.table("games").delete().eq("id", gid).execute()
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text=f"🗑 Deleted {len(broken)} broken games from the database."
+                    )
+                else:
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text="✅ All game links are reachable."
+                    )
+            except Exception as e:
+                logger.error(f"Broken links check error: {e}", exc_info=True)
                 try:
-                    games = supabase.table("games").select("id, playable_url").execute()
-                    broken = []
-                    async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as client:
-                        for game in games.data:
-                            url = game.get("playable_url")
-                            if not url:
-                                broken.append(game["id"])
-                                continue
-                            try:
-                                resp = await client.head(url)
-                                if resp.status_code >= 400:
-                                    resp_get = await client.get(url)
-                                    if resp_get.status_code >= 400:
-                                        broken.append(game["id"])
-                            except Exception:
-                                broken.append(game["id"])
-                    if broken:
-                        for gid in broken:
-                            supabase.table("games").delete().eq("id", gid).execute()
-                        await bot.edit_message_text(
-                            chat_id=chat_id,
-                            message_id=message_id,
-                            text=f"🗑 Deleted {len(broken)} broken games from the database."
-                        )
-                    else:
-                        await bot.edit_message_text(
-                            chat_id=chat_id,
-                            message_id=message_id,
-                            text="✅ All game links are reachable."
-                        )
-                except Exception as e:
-                    logger.error(f"Broken links check error: {e}", exc_info=True)
-                    try:
-                        await bot.edit_message_text(
-                            chat_id=chat_id,
-                            message_id=message_id,
-                            text=f"❌ Error during check: {str(e)[:200]}"
-                        )
-                    except Exception:
-                        pass
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text=f"❌ Error during check: {str(e)[:200]}"
+                    )
+                except Exception:
+                    pass
 
-        @dp.callback_query(F.data == "admin_check_broken")
-        async def admin_check_broken(callback: types.CallbackQuery):
-            await callback.answer("Link check initiated...")
-            chat_id = callback.message.chat.id
-            message_id = callback.message.message_id
-            await callback.message.edit_text("🔍 Checking broken links in background, please wait...")
-            asyncio.create_task(run_check_broken_and_notify(chat_id, message_id))
+    @dp.callback_query(F.data == "admin_check_broken")
+    async def admin_check_broken(callback: types.CallbackQuery):
+        await callback.answer("Link check initiated...")
+        chat_id = callback.message.chat.id
+        message_id = callback.message.message_id
+        await callback.message.edit_text("🔍 Checking broken links in background, please wait...")
+        asyncio.create_task(run_check_broken_and_notify(chat_id, message_id))
 
-        async def run_sync_and_notify(chat_id: int, message_id: int):
-            if _sync_lock.locked():
-                await bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    text="⏳ A sync is already in progress. Please wait..."
-                )
-                return
-            async with _sync_lock:
+    async def run_sync_and_notify(chat_id: int, message_id: int):
+        if _sync_lock.locked():
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text="⏳ A sync is already in progress. Please wait..."
+            )
+            return
+        async with _sync_lock:
+            try:
                 import sync_games
                 games = await asyncio.to_thread(sync_games.fetch_gamepix_games)
                 if not games:
@@ -440,24 +435,32 @@ if IS_RENDER:
                     message_id=message_id,
                     text=f"✅ Synced {inserted} new games from GamePix."
                 )
+            except Exception as e:
+                logger.error(f"Background sync error: {e}", exc_info=True)
+                try:
+                    await bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        text=f"❌ Sync error: {str(e)[:200]}"
+                    )
+                except Exception:
+                    pass
 
-        @dp.callback_query(F.data == "admin_sync_games")
-        async def admin_sync_games(callback: types.CallbackQuery):
-            await callback.answer("Sync started...")
-            chat_id = callback.message.chat.id
-            message_id = callback.message.message_id
-            await callback.message.edit_text("🔄 Syncing games from GamePix, please wait...")
-            asyncio.create_task(run_sync_and_notify(chat_id, message_id))
+    @dp.callback_query(F.data == "admin_sync_games")
+    async def admin_sync_games(callback: types.CallbackQuery):
+        await callback.answer("Sync started...")
+        chat_id = callback.message.chat.id
+        message_id = callback.message.message_id
+        await callback.message.edit_text("🔄 Syncing games from GamePix, please wait...")
+        asyncio.create_task(run_sync_and_notify(chat_id, message_id))
 
-        # ---- Include webhook router ----
-        app.include_router(create_webhook_router(bot, dp))
+    # ---- Include webhook router ----
+    app.include_router(create_webhook_router(bot, dp))
 
-        # ---- Startup event (only on Render) ----
-        @app.on_event("startup")
-        async def startup_render():
-            if not RENDER_EXTERNAL_URL:
-                logger.warning("RENDER_EXTERNAL_URL not set; webhook will not be set.")
-                return
+    # ---- Startup event (only on Render) ----
+    @app.on_event("startup")
+    async def startup_render():
+        if RENDER_EXTERNAL_URL:
             expected_url = f"{RENDER_EXTERNAL_URL.rstrip('/')}/api/telegram-webhook"
             try:
                 current = await bot.get_webhook_info()
@@ -469,13 +472,12 @@ if IS_RENDER:
             except Exception as e:
                 logger.error(f"Failed to set webhook: {e}")
 
-            # Start pinger
-            import ping
-            def start_pinger():
-                ping.run_pinger()
-            thread = threading.Thread(target=start_pinger, daemon=True)
-            thread.start()
-            logger.info("Background pinger started")
+        # Start pinger
+        import ping
+        def start_pinger():
+            ping.run_pinger()
+        thread = threading.Thread(target=start_pinger, daemon=True)
+        thread.start()
+        logger.info("Background pinger started")
 
-    # If BOT_TOKEN not set, we still run the app but without bot features.
-    
+# If BOT_TOKEN not set, we still run the app but without bot features.
