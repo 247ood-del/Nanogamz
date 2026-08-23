@@ -782,7 +782,7 @@ saveBtn.addEventListener('click', async (e) => {
     }
 });
 
-// ==================== SHARE GAME (NEW) ====================
+// ==================== SHARE GAME (UPDATED: direct clipboard copy) ====================
 const BOT_USERNAME = 'Nanogamz_bot'; // your bot's username without @
 
 shareBtn.addEventListener('click', (e) => {
@@ -798,26 +798,28 @@ shareBtn.addEventListener('click', (e) => {
 async function shareGame(gameId) {
     // Build the deep link: t.me/bot?startapp=gameId
     const deepLink = `https://t.me/${BOT_USERNAME}?startapp=${gameId}`;
-
-    // Use Telegram's native share dialog if available
-    if (window.Telegram && Telegram.WebApp && Telegram.WebApp.openTelegramLink) {
-        // We want to share the link itself; we can use a direct message with the link.
-        // Better: use the share URL method to let user pick a chat.
-        const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(deepLink)}&text=${encodeURIComponent('🎮 Check out this game on Nanogamz!')}`;
-        Telegram.WebApp.openTelegramLink(shareUrl);
-    } else {
-        // Fallback: copy to clipboard with a toast
+    try {
+        // Attempt to copy to clipboard
+        await navigator.clipboard.writeText(deepLink);
+        showToast('✅ Game link copied to clipboard!', 'success', 2000);
+    } catch (err) {
+        console.error('Copy failed', err);
+        // Fallback for older browsers / permission issues
         try {
-            await navigator.clipboard.writeText(deepLink);
+            const textarea = document.createElement('textarea');
+            textarea.value = deepLink;
+            document.body.appendChild(textarea);
+            textarea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textarea);
             showToast('✅ Game link copied to clipboard!', 'success', 2000);
-        } catch (err) {
-            console.error('Copy failed', err);
+        } catch (fallbackErr) {
             showToast('Failed to copy link. Please copy manually.', 'error');
         }
     }
 }
 
-// ==================== DEEP LINK HANDLER (NEW) ====================
+// ==================== DEEP LINK HANDLER ====================
 // When the app is opened via a shared link with ?startapp=GAME_ID,
 // automatically load that game.
 async function handleDeepLink() {
@@ -842,7 +844,7 @@ async function handleDeepLink() {
     }
 }
 
-// ------------------------ FETCH GAME BY ID (NEW) ------------------------
+// ------------------------ FETCH GAME BY ID ------------------------
 async function fetchGameById(gameId) {
     try {
         const resp = await fetch(`${BACKEND_URL}/game/${gameId}`);
