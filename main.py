@@ -331,6 +331,17 @@ if os.getenv("BOT_TOKEN"):
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher()
 
+    # ---------- Helper to parse pipe‑separated strings ----------
+    def parse_pipe_message(raw: str):
+        """Splits raw string by '|' and returns (text, button_text, button_url)."""
+        parts = [p.strip() for p in raw.split('|')]
+        if len(parts) != 3:
+            raise ValueError("Expected 3 parts separated by '|': text | button label | URL")
+        text, btn_text, url = parts
+        if not url.startswith(('http://', 'https://')):
+            raise ValueError("URL must start with http:// or https://")
+        return text, btn_text, url
+
     @dp.message(Command("start"))
     async def cmd_start(message: types.Message):
         logger.info(f"/start from user {message.from_user.id}")
@@ -355,6 +366,81 @@ if os.getenv("BOT_TOKEN"):
             [InlineKeyboardButton(text="🔄 Sync Games Now", callback_data="admin_sync_games")]
         ])
         await message.answer("🛠 Admin Panel", reply_markup=keyboard)
+
+    # ---------- NEW: /post command to broadcast text with button ----------
+    @dp.message(Command("post"), F.from_user.id.in_(ADMIN_IDS))
+    async def cmd_post(message: types.Message):
+        """Broadcast a text message with an inline button to @nanogamz."""
+        try:
+            # Remove the command prefix
+            raw = message.text.replace('/post', '', 1).strip()
+            if not raw:
+                await message.reply("❌ Please provide the message in the format:\n`/post Your text | Button label | https://example.com`", parse_mode="Markdown")
+                return
+
+            text, btn_text, url = parse_pipe_message(raw)
+
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=btn_text, url=url)]
+            ])
+
+            await bot.send_message(
+                chat_id="@nanogamz",
+                text=text,
+                reply_markup=keyboard,
+                parse_mode="Markdown"
+            )
+            await message.reply("✅ Post published to @nanogamz.")
+        except ValueError as e:
+            await message.reply(f"❌ Error: {e}\n\nUse format:\n`/post Your text | Button label | https://example.com`", parse_mode="Markdown")
+        except Exception as e:
+            logger.error(f"Error in /post: {e}")
+            await message.reply(f"❌ Failed to send post: {str(e)[:200]}")
+
+    # ---------- NEW: media (photo/video) broadcast handler ----------
+    @dp.message(F.photo | F.video, F.from_user.id.in_(ADMIN_IDS))
+    async def handle_media_post(message: types.Message):
+        """Send a photo or video with a caption and button to @nanogamz."""
+        try:
+            if not message.caption:
+                await message.reply("❌ Please provide a caption in the format:\n`Caption text | Button label | https://example.com`", parse_mode="Markdown")
+                return
+
+            raw = message.caption.strip()
+            caption, btn_text, url = parse_pipe_message(raw)
+
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=btn_text, url=url)]
+            ])
+
+            if message.photo:
+                file_id = message.photo[-1].file_id
+                await bot.send_photo(
+                    chat_id="@nanogamz",
+                    photo=file_id,
+                    caption=caption,
+                    reply_markup=keyboard,
+                    parse_mode="Markdown"
+                )
+            elif message.video:
+                file_id = message.video.file_id
+                await bot.send_video(
+                    chat_id="@nanogamz",
+                    video=file_id,
+                    caption=caption,
+                    reply_markup=keyboard,
+                    parse_mode="Markdown"
+                )
+            else:
+                await message.reply("❌ Unsupported media type.")
+                return
+
+            await message.reply("✅ Media post published to @nanogamz.")
+        except ValueError as e:
+            await message.reply(f"❌ Error: {e}\n\nUse format:\n`Caption text | Button label | https://example.com`", parse_mode="Markdown")
+        except Exception as e:
+            logger.error(f"Error in media broadcast: {e}")
+            await message.reply(f"❌ Failed to send media post: {str(e)[:200]}")
 
     _check_lock = asyncio.Lock()
     _sync_lock = asyncio.Lock()
