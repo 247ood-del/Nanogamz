@@ -452,7 +452,7 @@ if os.getenv("BOT_TOKEN"):
                 keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=btn_text, url=url)]])
                 await bot.send_message(
                     chat_id="@nanogamz",
-                    text="👇 **Click below to interact:**",
+                    text="👇 **probably nothing, probably something**",
                     reply_markup=keyboard,
                     parse_mode="Markdown"
                 )
