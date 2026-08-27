@@ -321,6 +321,7 @@ if os.getenv("BOT_TOKEN"):
     from aiogram import Bot, Dispatcher, types, F
     from aiogram.filters import Command
     from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo, Update
+    from aiogram.types import InputMediaPhoto, InputMediaVideo, MediaGroup
     from aiogram.exceptions import TelegramBadRequest
 
     BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -367,12 +368,15 @@ if os.getenv("BOT_TOKEN"):
         ])
         await message.answer("🛠 Admin Panel", reply_markup=keyboard)
 
-    # ---------- NEW: /post command to broadcast text with button ----------
+    # ---------- /post command to broadcast text with button ----------
     @dp.message(Command("post"), F.from_user.id.in_(ADMIN_IDS))
     async def cmd_post(message: types.Message):
         """Broadcast a text message with an inline button to @nanogamz."""
         try:
-            # Remove the command prefix
+            # Safely handle case where message.text might be None
+            if not message.text:
+                await message.reply("❌ This command requires a text message.")
+                return
             raw = message.text.replace('/post', '', 1).strip()
             if not raw:
                 await message.reply("❌ Please provide the message in the format:\n`/post Your text | Button label | https://example.com`", parse_mode="Markdown")
@@ -397,10 +401,10 @@ if os.getenv("BOT_TOKEN"):
             logger.error(f"Error in /post: {e}")
             await message.reply(f"❌ Failed to send post: {str(e)[:200]}")
 
-    # ---------- NEW: media (photo/video) broadcast handler ----------
-    @dp.message(F.photo | F.video, F.from_user.id.in_(ADMIN_IDS))
-    async def handle_media_post(message: types.Message):
-        """Send a photo or video with a caption and button to @nanogamz."""
+    # ---------- Single media (photo or video) handler (not part of a group) ----------
+    @dp.message(F.photo | F.video, F.media_group_id.is_(None), F.from_user.id.in_(ADMIN_IDS))
+    async def handle_single_media(message: types.Message):
+        """Send a single photo or video with caption and button to @nanogamz."""
         try:
             if not message.caption:
                 await message.reply("❌ Please provide a caption in the format:\n`Caption text | Button label | https://example.com`", parse_mode="Markdown")
@@ -439,8 +443,96 @@ if os.getenv("BOT_TOKEN"):
         except ValueError as e:
             await message.reply(f"❌ Error: {e}\n\nUse format:\n`Caption text | Button label | https://example.com`", parse_mode="Markdown")
         except Exception as e:
-            logger.error(f"Error in media broadcast: {e}")
+            logger.error(f"Error in single media broadcast: {e}")
             await message.reply(f"❌ Failed to send media post: {str(e)[:200]}")
+
+    # ---------- Album (media group) handler ----------
+    # Dictionary to store pending album messages
+    pending_albums = {}
+    album_tasks = {}
+
+    async def process_album(media_group_id: str, admin_chat_id: int):
+        """Process a collected album: send to channel and notify admin."""
+        # Retrieve messages
+        msgs = pending_albums.pop(media_group_id, [])
+        if not msgs:
+            return
+
+        # Sort by date
+        msgs.sort(key=lambda m: m.date)
+
+        # Extract media items
+        media_group = []
+        first_caption = None
+        for msg in msgs:
+            if msg.photo:
+                media_group.append(InputMediaPhoto(media=msg.photo[-1].file_id))
+            elif msg.video:
+                media_group.append(InputMediaVideo(media=msg.video.file_id))
+            # Use caption from first message that has one
+            if not first_caption and msg.caption:
+                first_caption = msg.caption
+
+        if not media_group:
+            await bot.send_message(admin_chat_id, "❌ No media found in group.")
+            return
+
+        if not first_caption:
+            await bot.send_message(admin_chat_id, "❌ Please provide a caption for the album in the format:\n`Caption text | Button label | https://example.com`", parse_mode="Markdown")
+            return
+
+        try:
+            caption, btn_text, url = parse_pipe_message(first_caption.strip())
+        except ValueError as e:
+            await bot.send_message(admin_chat_id, f"❌ Error in caption: {e}\n\nUse format:\n`Caption text | Button label | https://example.com`", parse_mode="Markdown")
+            return
+
+        # Create button
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=btn_text, url=url)]
+        ])
+
+        try:
+            # Send album to channel with caption
+            await bot.send_media_group(
+                chat_id="@nanogamz",
+                media=media_group,
+                caption=caption,
+                parse_mode="Markdown"
+            )
+            # Then send a separate message with the button (since media group doesn't support reply_markup)
+            await bot.send_message(
+                chat_id="@nanogamz",
+                text="👇 **Click the button below:**",
+                reply_markup=keyboard,
+                parse_mode="Markdown"
+            )
+            await bot.send_message(admin_chat_id, "✅ Album published to @nanogamz.")
+        except Exception as e:
+            logger.error(f"Error sending album: {e}")
+            await bot.send_message(admin_chat_id, f"❌ Failed to send album: {str(e)[:200]}")
+
+    @dp.message(F.media_group_id, F.from_user.id.in_(ADMIN_IDS))
+    async def handle_album(message: types.Message):
+        """Collect messages belonging to the same media group and process together."""
+        group_id = message.media_group_id
+        # Add message to pending list
+        if group_id not in pending_albums:
+            pending_albums[group_id] = []
+        pending_albums[group_id].append(message)
+
+        # Cancel any existing task for this group
+        if group_id in album_tasks:
+            album_tasks[group_id].cancel()
+
+        # Schedule a new task to process after a short delay (to collect all messages)
+        async def delayed_process():
+            await asyncio.sleep(0.5)  # wait for all messages in the group
+            await process_album(group_id, message.chat.id)
+            album_tasks.pop(group_id, None)
+
+        task = asyncio.create_task(delayed_process())
+        album_tasks[group_id] = task
 
     _check_lock = asyncio.Lock()
     _sync_lock = asyncio.Lock()
