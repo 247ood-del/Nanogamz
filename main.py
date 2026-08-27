@@ -402,35 +402,53 @@ if os.getenv("BOT_TOKEN"):
     # ---------- NEW: album storage for media groups ----------
     album_storage = {}
 
-    # ---------- NEW: album processor (delayed) ----------
+    # ---------- UPDATED: album processor (delayed) ----------
     async def process_album_after_delay(group_id: str, admin_chat_id: int):
         """Waits for album messages to collect and posts them to @nanogamz."""
-        await asyncio.sleep(1.5)  # Wait for Telegram to finish sending all files in the album
+        await asyncio.sleep(1.5)  # Wait for Telegram to receive all files in the album
         messages = album_storage.pop(group_id, [])
         if not messages:
             return
 
         # Extract caption from the first message that has one
         raw_caption = next((m.caption for m in messages if m.caption), None)
+        
+        # Strip optional /post prefix if present
+        if raw_caption and raw_caption.startswith('/post'):
+            raw_caption = raw_caption.replace('/post', '', 1).strip()
 
+        caption, btn_text, url = None, None, None
+        if raw_caption and '|' in raw_caption:
+            try:
+                caption, btn_text, url = parse_pipe_message(raw_caption.strip())
+            except Exception as e:
+                logger.error(f"Pipe parse error: {e}")
+
+        # Build media list with caption initialized directly
         media_list = []
-        for m in messages:
+        for idx, m in enumerate(messages):
+            item_caption = caption if idx == 0 else None
+            parse_mode = "Markdown" if idx == 0 and caption else None
+
             if m.photo:
-                media_list.append(InputMediaPhoto(media=m.photo[-1].file_id))
+                media_list.append(InputMediaPhoto(
+                    media=m.photo[-1].file_id, 
+                    caption=item_caption, 
+                    parse_mode=parse_mode
+                ))
             elif m.video:
-                media_list.append(InputMediaVideo(media=m.video.file_id))
+                media_list.append(InputMediaVideo(
+                    media=m.video.file_id, 
+                    caption=item_caption, 
+                    parse_mode=parse_mode
+                ))
 
         try:
-            if raw_caption and '|' in raw_caption:
-                caption, btn_text, url = parse_pipe_message(raw_caption.strip())
-                # Set caption on the first media item
-                media_list[0].caption = caption
-                media_list[0].parse_mode = "Markdown"
+            # 1. Send album
+            await bot.send_media_group(chat_id="@nanogamz", media=media_list)
 
-                # Send album
-                await bot.send_media_group(chat_id="@nanogamz", media=media_list)
-
-                # Send button in a follow-up message (Telegram limitation workaround)
+            # 2. Send follow-up button if button details exist
+            if btn_text and url:
                 keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=btn_text, url=url)]])
                 await bot.send_message(
                     chat_id="@nanogamz",
@@ -438,9 +456,6 @@ if os.getenv("BOT_TOKEN"):
                     reply_markup=keyboard,
                     parse_mode="Markdown"
                 )
-            else:
-                # No button, just send album
-                await bot.send_media_group(chat_id="@nanogamz", media=media_list)
 
             await bot.send_message(chat_id=admin_chat_id, text="✅ Album published to @nanogamz.")
         except Exception as e:
@@ -457,7 +472,6 @@ if os.getenv("BOT_TOKEN"):
                 gid = message.media_group_id
                 if gid not in album_storage:
                     album_storage[gid] = []
-                    # Process group after waiting briefly for all items to arrive
                     asyncio.create_task(process_album_after_delay(gid, message.chat.id))
 
                 album_storage[gid].append(message)
@@ -468,7 +482,11 @@ if os.getenv("BOT_TOKEN"):
                 await message.reply("❌ Please provide a caption in the format:\n`Caption text | Button label | https://example.com`", parse_mode="Markdown")
                 return
 
-            caption, btn_text, url = parse_pipe_message(message.caption.strip())
+            raw_caption = message.caption.strip()
+            if raw_caption.startswith('/post'):
+                raw_caption = raw_caption.replace('/post', '', 1).strip()
+
+            caption, btn_text, url = parse_pipe_message(raw_caption)
             keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=btn_text, url=url)]])
 
             if message.photo:
