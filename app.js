@@ -3,7 +3,6 @@
 import { ADS, fetchLiveAds } from './ads.js';
 
 // ------------------------ CONFIG ------------------------
-// Use the URL set in index.html (or fallback)
 const BACKEND_URL = window.BACKEND_URL || 'https://nanogamz.onrender.com';
 
 const CATEGORIES = [
@@ -50,6 +49,37 @@ function showToast(message, type = 'info', duration = 3000) {
     }, duration);
 }
 
+// ------------------------ HELPERS ------------------------
+function escapeHtml(str) {
+    if (str == null) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function formatTime(iso) {
+    if (!iso) return '';
+    try {
+        const d = new Date(iso);
+        const now = new Date();
+        const sameDay = d.toDateString() === now.toDateString();
+        if (sameDay) {
+            return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        }
+        const diffDays = Math.floor((now - d) / (1000 * 60 * 60 * 24));
+        if (diffDays === 1) return 'Yesterday';
+        if (diffDays < 7) {
+            return d.toLocaleDateString([], { weekday: 'short' });
+        }
+        return d.toLocaleDateString([], { day: '2-digit', month: '2-digit' });
+    } catch {
+        return '';
+    }
+}
+
 // ------------------------ STATE ------------------------
 const state = {
     currentCategory: '🔥 Discover',
@@ -69,12 +99,18 @@ const state = {
         bar: '#1a1a1a',
         accent: '#6c5ce7'
     },
-    // Saved games
     savedGameIds: new Set(),
     savedOffset: 0,
     savedLimit: 20,
     savedHasMore: true,
-    loadingSaved: false
+    loadingSaved: false,
+    // --- Support chat ---
+    isAdmin: false,
+    supportPolling: null,
+    adminListPolling: null,
+    adminChatPolling: null,
+    activeSupportUser: null,
+    activeSupportUserInfo: null
 };
 
 // ------------------------ TELEGRAM WEBAPP ------------------------
@@ -105,8 +141,8 @@ if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
         document.getElementById('userAvatar').src = canvas.toDataURL();
     }
 
-    // 🔽 Pre-fetch saved games when user is verified
     fetchUserSavedGameIds();
+    checkAdminStatus();
 }
 
 // ------------------------ DOM REFS ------------------------
@@ -125,17 +161,32 @@ const closeMenuBtn = document.getElementById('closeMenuBtn');
 const adCarousel = document.querySelector('.ad-carousel');
 const gridContainer = document.getElementById('gameGrid');
 
-// New elements for pill controls and saved games
 const saveBtn = document.getElementById('saveBtn');
 const savedOverlay = document.getElementById('savedOverlay');
 const savedGamesLink = document.getElementById('savedGamesLink');
 const closeSavedOverlay = document.getElementById('closeSavedOverlay');
 const savedGrid = document.getElementById('savedGrid');
 const savedGridContainer = document.getElementById('savedGridContainer');
-// NEW: refresh button inside saved overlay
 const refreshSavedBtn = document.getElementById('refreshSavedBtn');
-// NEW: share button
 const shareBtn = document.getElementById('shareBtn');
+
+// Support chat DOM refs
+const supportOverlay = document.getElementById('supportOverlay');
+const supportChatView = document.getElementById('supportChatView');
+const supportListView = document.getElementById('supportListView');
+const adminChatView = document.getElementById('adminChatView');
+const supportMessages = document.getElementById('supportMessages');
+const supportInput = document.getElementById('supportInput');
+const supportSendBtn = document.getElementById('supportSendBtn');
+const closeSupportChat = document.getElementById('closeSupportChat');
+const closeSupportList = document.getElementById('closeSupportList');
+const supportConversations = document.getElementById('supportConversations');
+const adminChatMessages = document.getElementById('adminChatMessages');
+const adminChatInput = document.getElementById('adminChatInput');
+const adminChatSendBtn = document.getElementById('adminChatSendBtn');
+const adminChatName = document.getElementById('adminChatName');
+const adminChatAvatar = document.getElementById('adminChatAvatar');
+const backToSupportList = document.getElementById('backToSupportList');
 
 // ------------------------ SEARCH PANEL ------------------------
 const searchPanel = document.getElementById('searchPanel');
@@ -162,9 +213,7 @@ function closeSearch() {
 }
 
 function resetSearch() {
-    // Clear search state and reload the current category view
     if (state.searchQuery === '') {
-        // If already empty, just close the panel
         closeSearch();
         return;
     }
@@ -179,7 +228,7 @@ function resetSearch() {
 
 function toggleSearch() {
     if (searchOpen) {
-        resetSearch(); // user closed without submitting -> clear search
+        resetSearch();
     } else {
         openSearch();
     }
@@ -187,7 +236,6 @@ function toggleSearch() {
 
 function performSearch() {
     const query = searchInput.value.trim();
-    // Close panel first (UI), then set query and load
     closeSearch();
     state.searchQuery = query;
     state.offset = 0;
@@ -206,7 +254,6 @@ searchInput.addEventListener('keypress', (e) => {
     }
 });
 
-// Clicking outside the search panel clears the search
 document.addEventListener('click', (e) => {
     if (searchOpen && !searchPanel.contains(e.target) && e.target !== searchToggle) {
         resetSearch();
@@ -290,8 +337,7 @@ populatePalette('theme');
 
 // ------------------------ AD CAROUSEL (DYNAMIC) ------------------------
 async function initAdCarousel() {
-    // Try to load live ads first
-    let adsToUse = ADS;  // fallback to static ads
+    let adsToUse = ADS;
 
     try {
         const liveAds = await fetchLiveAds();
@@ -302,7 +348,6 @@ async function initAdCarousel() {
         // silent fallback – keep using ADS
     }
 
-    // Render slides
     adWrapper.innerHTML = adsToUse.map(ad => `
         <div class="swiper-slide">
             <a href="${ad.link}" target="_blank" rel="noopener">
@@ -311,12 +356,10 @@ async function initAdCarousel() {
         </div>
     `).join('');
 
-    // Destroy existing Swiper instance if any
     if (state.swiperAd) {
         state.swiperAd.destroy(true, true);
     }
 
-    // Initialize Swiper
     state.swiperAd = new Swiper('#adCarousel', {
         loop: true,
         autoplay: { delay: 4000, disableOnInteraction: false },
@@ -327,7 +370,6 @@ async function initAdCarousel() {
     });
 }
 
-// Call it on load
 initAdCarousel();
 
 // ------------------------ CATEGORY BAR ------------------------
@@ -409,7 +451,6 @@ async function loadGames(reset = false) {
             `;
             grid.appendChild(skel);
         }
-        // Reset ad offset when loading new content
         resetAdOffset();
     }
 
@@ -440,15 +481,13 @@ gridContainer.addEventListener('scroll', () => {
     }
 });
 
-// ==================== PARALLAX AD COLLAPSE (DELTA‑BASED) ====================
+// ==================== PARALLAX AD COLLAPSE ====================
 let lastScrollTop = 0;
 let adOffset = 0;
 const AD_HEIGHT = 160;
 const TOP_BAR_HEIGHT = 56;
 const CAT_BAR_HEIGHT = 48;
-
-// 🔥 NEW: Adjust this to control speed. 0.7 = 70% of scroll speed.
-const SCROLL_RATIO = 0.7; 
+const SCROLL_RATIO = 0.7;
 
 function resetAdOffset() {
     adOffset = 0;
@@ -462,7 +501,6 @@ function updateAdPosition(offset) {
     gridContainer.style.top = `${TOP_BAR_HEIGHT + AD_HEIGHT + CAT_BAR_HEIGHT - offset}px`;
 }
 
-// Listen to scroll with delta
 let ticking = false;
 gridContainer.addEventListener('scroll', () => {
     if (!ticking) {
@@ -470,10 +508,7 @@ gridContainer.addEventListener('scroll', () => {
             const scrollTop = gridContainer.scrollTop;
             const delta = scrollTop - lastScrollTop;
             lastScrollTop = scrollTop;
-
-            // 👇 MULTIPLY the delta by the ratio here
             adOffset = Math.min(Math.max(adOffset + (delta * SCROLL_RATIO), 0), AD_HEIGHT);
-
             updateAdPosition(adOffset);
             ticking = false;
         });
@@ -481,16 +516,13 @@ gridContainer.addEventListener('scroll', () => {
     }
 });
 
-// Ensure initial position is correct
 resetAdOffset();
 
-// ------------------------ PULL-TO-REFRESH (with search cancellation) ------------------------
+// ------------------------ REFRESH ------------------------
 refreshBtn.addEventListener('click', () => {
     if (state.searchQuery) {
-        // Clear active search and reload current category
-        resetSearch(); // this also closes panel and reloads
+        resetSearch();
     } else {
-        // Normal refresh
         state.offset = 0;
         state.hasMore = true;
         state.games = [];
@@ -501,8 +533,6 @@ refreshBtn.addEventListener('click', () => {
 
 // ------------------------ GAME MODAL ------------------------
 let activeModalGame = null;
-
-// --- DATABASE-DRIVEN RECENT GAMES LOGIC (NEW) ---
 
 async function recordRecentGame(gameId) {
     if (!state.user || !state.user.id) return;
@@ -515,7 +545,6 @@ async function recordRecentGame(gameId) {
                 game_id: String(gameId)
             })
         });
-        // Refresh recent games UI in menu
         renderRecentGames();
     } catch (err) {
         console.error("Failed to record recent game:", err);
@@ -545,19 +574,16 @@ async function renderRecentGames() {
 
         games.forEach(game => {
             const item = document.createElement('div');
-            item.className = 'recent-game';  // matches existing CSS
+            item.className = 'recent-game';
             item.style.cursor = 'pointer';
             item.innerHTML = `
                 <img src="${game.thumbnail || 'https://via.placeholder.com/70/333/666?text=?'}" alt="${game.title}" />
                 <div style="font-size:10px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${game.title}</div>
             `;
-
-            // Directly launches the complete game object returned from Supabase!
             item.addEventListener('click', () => {
-                toggleMenu(); // Close side menu
+                toggleMenu();
                 openGame(game);
             });
-
             recentGamesContainer.appendChild(item);
         });
     } catch (err) {
@@ -585,12 +611,8 @@ async function fetchUserSavedGameIds() {
 function resetPillPosition() {
     const pill = document.querySelector('.game-control-pill');
     if (!pill) return;
-
-    // Clear inline drag offsets
     pill.style.left = '';
     pill.style.top = '';
-
-    // Re-apply default right alignment specified in CSS
     pill.style.right = '';
 }
 
@@ -602,17 +624,12 @@ async function openGame(game) {
     }
 
     activeModalGame = game;
-
-    // 1. Immediately reflect current saved state in UI
     syncSavedState(game.id);
-    
     gameIframe.src = game.playable_url;
     gameModal.classList.add('active');
 
-    // Record game into user's recent_games array in Supabase
     recordRecentGame(game.id);
 
-    // 2. Fetch fresh list in background to ensure accurate button state
     if (state.user && state.user.id) {
         await fetchUserSavedGameIds();
         syncSavedState(game.id);
@@ -622,12 +639,9 @@ async function openGame(game) {
 function closeGameModal() {
     gameModal.classList.remove('active');
     gameIframe.src = '';
-    
-    // Reset the control pill position back to default
     resetPillPosition();
 }
 
-// Attach the updated handler to all closing events
 modalClose.addEventListener('click', closeGameModal);
 
 gameModal.addEventListener('click', (e) => {
@@ -636,12 +650,6 @@ gameModal.addEventListener('click', (e) => {
     }
 });
 
-// ------------------------ RECENT GAMES ------------------------
-// (Initial render – kept for backward compatibility, but the async version will overwrite)
-// We still call renderRecentGames after user is set and on menu open.
-// The old localStorage-based render is replaced by the async version above.
-// The initial call will be made in the menu toggle logic below.
-
 // ------------------------ SIDE MENU ------------------------
 function toggleMenu() {
     const isOpen = menuPanel.classList.contains('open');
@@ -649,7 +657,6 @@ function toggleMenu() {
     menuOverlay.classList.toggle('active');
     document.body.style.overflow = isOpen ? '' : 'hidden';
     if (!isOpen) {
-        // When opening menu, refresh recent games from server
         renderRecentGames();
     }
 }
@@ -732,14 +739,14 @@ document.querySelectorAll('.modal-overlay').forEach(overlay => {
     });
 });
 
+// ==================== SUPPORT LINK (REPLACED – opens in-app overlay) ====================
 document.getElementById('supportLink').addEventListener('click', (e) => {
     e.preventDefault();
-    tg.openTelegramLink('https://t.me/ojareridominion');
     toggleMenu();
+    openSupport();
 });
 
 // ==================== PILL CONTROLS ====================
-// Save/Unsave
 async function syncSavedState(gameId) {
     const isSaved = state.savedGameIds.has(String(gameId));
     saveBtn.textContent = isSaved ? '📑' : '🔖';
@@ -766,9 +773,7 @@ saveBtn.addEventListener('click', async (e) => {
             const message = data.is_saved ? 'Game saved!' : 'Game removed from saved.';
             showToast(message, 'success');
 
-            // 🔥 FIX #1: If the saved overlay is currently open, refresh it automatically
             if (savedOverlay.classList.contains('active')) {
-                // Reset offset and reload from scratch
                 state.savedOffset = 0;
                 state.savedHasMore = true;
                 loadSavedGames(true);
@@ -782,8 +787,8 @@ saveBtn.addEventListener('click', async (e) => {
     }
 });
 
-// ==================== SHARE GAME (UPDATED: direct clipboard copy) ====================
-const BOT_USERNAME = 'Nanogamz_bot'; // your bot's username without @
+// ==================== SHARE GAME ====================
+const BOT_USERNAME = 'Nanogamz_bot';
 
 shareBtn.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -791,20 +796,16 @@ shareBtn.addEventListener('click', (e) => {
         showToast('No game loaded to share.', 'error');
         return;
     }
-    const gameId = activeModalGame.id;
-    shareGame(gameId);
+    shareGame(activeModalGame.id);
 });
 
 async function shareGame(gameId) {
-    // Build the deep link: t.me/bot?startapp=gameId
     const deepLink = `https://t.me/${BOT_USERNAME}?startapp=${gameId}`;
     try {
-        // Attempt to copy to clipboard
         await navigator.clipboard.writeText(deepLink);
         showToast('✅ Game link copied to clipboard!', 'success', 2000);
     } catch (err) {
         console.error('Copy failed', err);
-        // Fallback for older browsers / permission issues
         try {
             const textarea = document.createElement('textarea');
             textarea.value = deepLink;
@@ -820,18 +821,14 @@ async function shareGame(gameId) {
 }
 
 // ==================== DEEP LINK HANDLER ====================
-// When the app is opened via a shared link with ?startapp=GAME_ID,
-// automatically load that game.
 async function handleDeepLink() {
     if (!window.Telegram || !Telegram.WebApp) return;
     const startParam = Telegram.WebApp.initDataUnsafe?.start_param;
     if (!startParam) return;
 
-    // startParam is the game ID passed in the link
     try {
         const game = await fetchGameById(startParam);
         if (game) {
-            // Wait a moment for the UI to settle, then open the game
             setTimeout(() => {
                 openGame(game);
             }, 500);
@@ -844,7 +841,6 @@ async function handleDeepLink() {
     }
 }
 
-// ------------------------ FETCH GAME BY ID ------------------------
 async function fetchGameById(gameId) {
     try {
         const resp = await fetch(`${BACKEND_URL}/game/${gameId}`);
@@ -877,7 +873,6 @@ if (pill) {
         initialLeft = rect.left;
         initialTop = rect.top;
 
-        // Switch from right-based positioning to left/top absolute offsets for smooth dragging
         pill.style.right = 'auto';
         pill.style.left = `${initialLeft}px`;
         pill.style.top = `${initialTop}px`;
@@ -885,20 +880,16 @@ if (pill) {
 
     const moveDrag = (clientX, clientY) => {
         if (!isDragging) return;
-
         const deltaX = clientX - startX;
         const deltaY = clientY - startY;
 
-        // Mark as dragged if threshold passed (prevents click events from firing accidentally when dragging)
         if (Math.abs(deltaX) > 5 || Math.abs(deltaY) > 5) {
             hasDragged = true;
         }
 
-        // Calculate target positions
         let newLeft = initialLeft + deltaX;
         let newTop = initialTop + deltaY;
 
-        // Keep inside screen bounds
         const maxLeft = window.innerWidth - pill.offsetWidth - 10;
         const maxTop = window.innerHeight - pill.offsetHeight - 10;
 
@@ -913,7 +904,6 @@ if (pill) {
         isDragging = false;
     };
 
-    // --- Touch Events (Mobile Telegram Mini App) ---
     pill.addEventListener('touchstart', (e) => {
         const touch = e.touches[0];
         startDrag(touch.clientX, touch.clientY);
@@ -928,7 +918,6 @@ if (pill) {
 
     window.addEventListener('touchend', endDrag);
 
-    // --- Mouse Events (Desktop Testing) ---
     pill.addEventListener('mousedown', (e) => {
         startDrag(e.clientX, e.clientY);
     });
@@ -939,7 +928,6 @@ if (pill) {
 
     window.addEventListener('mouseup', endDrag);
 
-    // Block button clicks if user was dragging the pill
     pill.querySelectorAll('.pill-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
             if (hasDragged) {
@@ -1049,12 +1037,10 @@ async function loadSavedGames(reset = false) {
     }
 }
 
-// Close dropdowns on outside click
 document.addEventListener('click', () => {
     document.querySelectorAll('.card-dropdown.show').forEach(d => d.classList.remove('show'));
 });
 
-// Open saved overlay
 savedGamesLink.addEventListener('click', (e) => {
     e.preventDefault();
     toggleMenu();
@@ -1066,19 +1052,15 @@ closeSavedOverlay.addEventListener('click', () => {
     savedOverlay.classList.remove('active');
 });
 
-// 🔥 FIX #3: Manual refresh button inside the saved overlay
 if (refreshSavedBtn) {
     refreshSavedBtn.addEventListener('click', () => {
-        // Reset and reload the saved games
         state.savedOffset = 0;
         state.savedHasMore = true;
         loadSavedGames(true);
-        // Optionally show a toast feedback
         showToast('Refreshing saved games...', 'info', 1000);
     });
 }
 
-// Infinite scroll inside Saved Games overlay
 savedGridContainer.addEventListener('scroll', () => {
     if (savedGridContainer.scrollTop + savedGridContainer.clientHeight >= savedGridContainer.scrollHeight - 100) {
         if (!state.loadingSaved && state.savedHasMore) {
@@ -1087,10 +1069,298 @@ savedGridContainer.addEventListener('scroll', () => {
     }
 });
 
-// ------------------------ INITIAL LOAD ------------------------
-loadGames(true);
-// Initial render of recent games (will be refreshed when menu opens)
-renderRecentGames();
+// =============================================================================
+//  SUPPORT CHAT  (USER VIEW + ADMIN VIEW)
+// =============================================================================
 
-// ------------------------ DEEP LINK HANDLER (run after load) ------------------------
+async function checkAdminStatus() {
+    if (!state.user || !state.user.id) return;
+    try {
+        const resp = await fetch(`${BACKEND_URL}/api/support/is-admin?telegram_id=${state.user.id}`);
+        const data = await resp.json();
+        state.isAdmin = !!data.is_admin;
+    } catch (e) {
+        state.isAdmin = false;
+    }
+}
+
+function openSupport() {
+    if (!state.user || !state.user.id) {
+        showToast('Please open the app inside Telegram to use support.', 'error');
+        return;
+    }
+    supportOverlay.classList.add('active');
+
+    if (state.isAdmin) {
+        supportListView.style.display = 'flex';
+        supportChatView.style.display = 'none';
+        adminChatView.style.display = 'none';
+        loadSupportConversations();
+        startAdminListPolling();
+    } else {
+        supportListView.style.display = 'none';
+        adminChatView.style.display = 'none';
+        supportChatView.style.display = 'flex';
+        loadSupportMessages();
+        startSupportPolling();
+    }
+}
+
+function closeSupport() {
+    supportOverlay.classList.remove('active');
+    stopAllSupportPolling();
+    state.activeSupportUser = null;
+    state.activeSupportUserInfo = null;
+}
+
+function stopAllSupportPolling() {
+    if (state.supportPolling) { clearInterval(state.supportPolling); state.supportPolling = null; }
+    if (state.adminListPolling) { clearInterval(state.adminListPolling); state.adminListPolling = null; }
+    if (state.adminChatPolling) { clearInterval(state.adminChatPolling); state.adminChatPolling = null; }
+}
+
+function startSupportPolling() {
+    if (state.supportPolling) clearInterval(state.supportPolling);
+    state.supportPolling = setInterval(() => {
+        if (supportOverlay.classList.contains('active') && supportChatView.style.display !== 'none') {
+            loadSupportMessages(true);
+        }
+    }, 5000);
+}
+
+function startAdminListPolling() {
+    if (state.adminListPolling) clearInterval(state.adminListPolling);
+    state.adminListPolling = setInterval(() => {
+        if (supportOverlay.classList.contains('active') && supportListView.style.display !== 'none') {
+            loadSupportConversations();
+        }
+    }, 8000);
+}
+
+function startAdminChatPolling() {
+    if (state.adminChatPolling) clearInterval(state.adminChatPolling);
+    state.adminChatPolling = setInterval(() => {
+        if (supportOverlay.classList.contains('active') && adminChatView.style.display !== 'none' && state.activeSupportUser) {
+            loadAdminChatMessages(state.activeSupportUser, true);
+        }
+    }, 5000);
+}
+
+// -------------------- USER SIDE --------------------
+async function loadSupportMessages(silent = false) {
+    if (!state.user || !state.user.id) return;
+    try {
+        const resp = await fetch(`${BACKEND_URL}/api/support/messages?telegram_id=${state.user.id}`);
+        const data = await resp.json();
+        renderSupportMessages(data.messages || []);
+        // Mark admin messages as read by user
+        await fetch(`${BACKEND_URL}/api/support/mark-read`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ telegram_id: state.user.id, viewer: 'user' })
+        });
+    } catch (e) {
+        if (!silent) console.error('Load support messages error:', e);
+    }
+}
+
+function renderSupportMessages(msgs) {
+    if (!supportMessages) return;
+    if (!msgs.length) {
+        supportMessages.innerHTML = `
+            <div class="support-empty">
+                <div style="font-size:40px;">💬</div>
+                <div>Start a conversation with our support team.</div>
+                <div style="opacity:0.6; font-size:13px;">We usually reply within 24 hours.</div>
+            </div>`;
+        return;
+    }
+    supportMessages.innerHTML = msgs.map(m => {
+        const isMine = m.sender === 'user';
+        return `<div class="support-bubble ${isMine ? 'mine' : 'theirs'}">
+            <div class="support-text">${escapeHtml(m.message).replace(/\n/g, '<br>')}</div>
+            <span class="support-time">${formatTime(m.created_at)}</span>
+        </div>`;
+    }).join('');
+    supportMessages.scrollTop = supportMessages.scrollHeight;
+}
+
+async function sendSupportMessage() {
+    const text = (supportInput.value || '').trim();
+    if (!text || !state.user) return;
+    supportInput.value = '';
+
+    // Optimistic render
+    const optimistic = document.createElement('div');
+    optimistic.className = 'support-bubble mine';
+    optimistic.innerHTML = `<div class="support-text">${escapeHtml(text)}</div><span class="support-time">now</span>`;
+    supportMessages.appendChild(optimistic);
+    supportMessages.scrollTop = supportMessages.scrollHeight;
+
+    try {
+        await fetch(`${BACKEND_URL}/api/support/send`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                telegram_id: state.user.id,
+                message: text,
+                sender: 'user',
+                first_name: state.user.first_name || '',
+                username: state.user.username || '',
+                photo_url: state.user.photo_url || ''
+            })
+        });
+        await loadSupportMessages();
+    } catch (e) {
+        showToast('Failed to send message.', 'error');
+    }
+}
+
+supportSendBtn.addEventListener('click', sendSupportMessage);
+supportInput.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        sendSupportMessage();
+    }
+});
+closeSupportChat.addEventListener('click', closeSupport);
+
+// -------------------- ADMIN SIDE --------------------
+async function loadSupportConversations() {
+    if (!state.user || !state.user.id) return;
+    try {
+        const resp = await fetch(`${BACKEND_URL}/api/support/conversations?admin_id=${state.user.id}`);
+        const data = await resp.json();
+        renderSupportConversations(data.conversations || []);
+    } catch (e) {
+        console.error('Load conversations error:', e);
+    }
+}
+
+function renderSupportConversations(convos) {
+    if (!supportConversations) return;
+    if (!convos.length) {
+        supportConversations.innerHTML = '<div class="saved-empty-state">No conversations yet</div>';
+        return;
+    }
+    supportConversations.innerHTML = convos.map(c => {
+        const preview = (c.last_message || '').slice(0, 60);
+        const avatarSrc = c.photo_url || 'https://via.placeholder.com/96/333/666?text=?';
+        const unreadHtml = c.unread_count > 0 ? `<span class="support-unread">${c.unread_count}</span>` : '';
+        const senderPrefix = c.last_sender === 'admin' ? '<span style="opacity:0.5">You: </span>' : '';
+        return `
+            <div class="support-convo" data-tid="${c.telegram_id}">
+                <img class="support-avatar" src="${avatarSrc}" alt="" onerror="this.src='https://via.placeholder.com/96/333/666?text=?'" />
+                <div class="support-convo-body">
+                    <div class="support-convo-top">
+                        <span class="support-convo-name">${escapeHtml(c.first_name)}</span>
+                        <span class="support-convo-time">${formatTime(c.last_message_at)}</span>
+                    </div>
+                    <div class="support-convo-bottom">
+                        <span class="support-convo-preview">${senderPrefix}${escapeHtml(preview)}</span>
+                        ${unreadHtml}
+                    </div>
+                </div>
+            </div>`;
+    }).join('');
+
+    supportConversations.querySelectorAll('.support-convo').forEach(el => {
+        el.addEventListener('click', () => {
+            const tid = parseInt(el.dataset.tid);
+            const convo = convos.find(c => String(c.telegram_id) === el.dataset.tid);
+            openAdminChat(tid, convo);
+        });
+    });
+}
+
+async function openAdminChat(telegramId, convo) {
+    state.activeSupportUser = telegramId;
+    state.activeSupportUserInfo = convo || null;
+
+    supportListView.style.display = 'none';
+    adminChatView.style.display = 'flex';
+    adminChatName.textContent = convo?.first_name || 'User';
+    adminChatAvatar.src = convo?.photo_url || 'https://via.placeholder.com/64/333/666?text=?';
+    adminChatAvatar.onerror = () => { adminChatAvatar.src = 'https://via.placeholder.com/64/333/666?text=?'; };
+
+    await loadAdminChatMessages(telegramId);
+    await fetch(`${BACKEND_URL}/api/support/mark-read`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ telegram_id: telegramId, viewer: 'admin' })
+    });
+
+    startAdminChatPolling();
+}
+
+async function loadAdminChatMessages(telegramId, silent = false) {
+    try {
+        const resp = await fetch(`${BACKEND_URL}/api/support/messages?telegram_id=${telegramId}`);
+        const data = await resp.json();
+        const msgs = data.messages || [];
+        adminChatMessages.innerHTML = msgs.map(m => {
+            const isMine = m.sender === 'admin';
+            return `<div class="support-bubble ${isMine ? 'mine' : 'theirs'}">
+                <div class="support-text">${escapeHtml(m.message).replace(/\n/g, '<br>')}</div>
+                <span class="support-time">${formatTime(m.created_at)}</span>
+            </div>`;
+        }).join('');
+        adminChatMessages.scrollTop = adminChatMessages.scrollHeight;
+    } catch (e) {
+        if (!silent) console.error('Load admin chat error:', e);
+    }
+}
+
+async function sendAdminReply() {
+    const text = (adminChatInput.value || '').trim();
+    if (!text || !state.activeSupportUser || !state.user) return;
+    adminChatInput.value = '';
+
+    const optimistic = document.createElement('div');
+    optimistic.className = 'support-bubble mine';
+    optimistic.innerHTML = `<div class="support-text">${escapeHtml(text)}</div><span class="support-time">now</span>`;
+    adminChatMessages.appendChild(optimistic);
+    adminChatMessages.scrollTop = adminChatMessages.scrollHeight;
+
+    try {
+        await fetch(`${BACKEND_URL}/api/support/send`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                telegram_id: state.activeSupportUser,
+                message: text,
+                sender: 'admin',
+                admin_id: state.user.id
+            })
+        });
+        await loadAdminChatMessages(state.activeSupportUser);
+    } catch (e) {
+        showToast('Failed to send reply.', 'error');
+    }
+}
+
+adminChatSendBtn.addEventListener('click', sendAdminReply);
+adminChatInput.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        sendAdminReply();
+    }
+});
+closeSupportList.addEventListener('click', closeSupport);
+
+backToSupportList.addEventListener('click', () => {
+    if (state.adminChatPolling) { clearInterval(state.adminChatPolling); state.adminChatPolling = null; }
+    state.activeSupportUser = null;
+    state.activeSupportUserInfo = null;
+    adminChatView.style.display = 'none';
+    supportListView.style.display = 'flex';
+    loadSupportConversations();
+    startAdminListPolling();
+});
+
+// =============================================================================
+//  INITIAL LOAD
+// =============================================================================
+loadGames(true);
+renderRecentGames();
 handleDeepLink();
