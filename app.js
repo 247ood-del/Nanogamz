@@ -1403,41 +1403,58 @@ safeOn('imagePreviewModal', 'click', (e) => {
 // hundred KB of base64 in the DB. This keeps polling light.
 function compressImage(file, maxDim = 800, quality = 0.72) {
     return new Promise((resolve) => {
-        const img = new Image();
-        const url = URL.createObjectURL(file);
-        img.onload = () => {
-            URL.revokeObjectURL(url);
-            let { width, height } = img;
-            if (width > maxDim || height > maxDim) {
-                if (width > height) {
-                    height = Math.round((height * maxDim) / width);
-                    width = maxDim;
-                } else {
-                    width = Math.round((width * maxDim) / height);
-                    height = maxDim;
+        const reader = new FileReader();
+        
+        reader.onload = (e) => {
+            const img = new Image();
+            
+            img.onload = () => {
+                let { width, height } = img;
+                if (width > maxDim || height > maxDim) {
+                    if (width > height) {
+                        height = Math.round((height * maxDim) / width);
+                        width = maxDim;
+                    } else {
+                        width = Math.round((width * maxDim) / height);
+                        height = maxDim;
+                    }
                 }
-            }
-            const canvas = document.createElement('canvas');
-            canvas.width = width;
-            canvas.height = height;
-            const ctx = canvas.getContext('2d');
+                
+                const canvas = document.createElement('canvas');
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d');
 
-            // ✅ FIX: Fill canvas with white background to prevent transparent PNGs turning black in JPEG
-            ctx.fillStyle = '#FFFFFF';
-            ctx.fillRect(0, 0, width, height);
+                // ✅ FIX: Fill canvas with white background to prevent transparent PNGs turning black in JPEG
+                ctx.fillStyle = '#FFFFFF';
+                ctx.fillRect(0, 0, width, height);
 
-            ctx.drawImage(img, 0, 0, width, height);
-            try {
-                resolve(canvas.toDataURL('image/jpeg', quality));
-            } catch {
+                ctx.drawImage(img, 0, 0, width, height);
+                
+                try {
+                    resolve(canvas.toDataURL('image/jpeg', quality));
+                } catch (err) {
+                    console.error('Canvas toDataURL failed:', err);
+                    resolve(null);
+                }
+            };
+            
+            img.onerror = (err) => {
+                console.error('Image load failed:', err);
                 resolve(null);
-            }
+            };
+            
+            // ✅ FIX: Use the FileReader Data URL instead of a blob URL
+            img.src = e.target.result;
         };
-        img.onerror = () => {
-            URL.revokeObjectURL(url);
+        
+        reader.onerror = (err) => {
+            console.error('FileReader failed:', err);
             resolve(null);
         };
-        img.src = url;
+        
+        // ✅ FIX: Read the file as a Data URL (guarantees full image availability)
+        reader.readAsDataURL(file);
     });
 }
 
