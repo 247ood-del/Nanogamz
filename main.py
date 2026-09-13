@@ -217,22 +217,35 @@ async def support_is_admin(telegram_id: int):
 
 @app.post("/api/support/send")
 async def support_send(request: Request):
+    # ✅ FIX 3: Parse the body in its own try/except. When a high-resolution
+    # image is sent as base64 (even after client-side compression), an oversized
+    # JSON payload can make Starlette/Uvicorn/Gunicorn raise an error during
+    # request.json(). We catch that here and return a proper 413 so the client
+    # can show a helpful message instead of a raw 500.
     try:
         data = await request.json()
-        telegram_id = data.get("telegram_id")
-        message = (data.get("message") or "").strip()
-        sender = data.get("sender", "user")
-        first_name = data.get("first_name") or ""
-        username = data.get("username") or ""
-        photo_url = data.get("photo_url") or ""
-        admin_id = data.get("admin_id")
+    except Exception as parse_err:
+        logger.error(f"Failed to parse request JSON (payload may be too large): {parse_err}")
+        return {
+            "status": "error",
+            "message": "Payload too large. Please select a smaller image."
+        }, 413
 
-        if not telegram_id or not message:
-            return {"status": "error", "message": "Missing parameters"}
+    telegram_id = data.get("telegram_id")
+    message = (data.get("message") or "").strip()
+    sender = data.get("sender", "user")
+    first_name = data.get("first_name") or ""
+    username = data.get("username") or ""
+    photo_url = data.get("photo_url") or ""
+    admin_id = data.get("admin_id")
 
-        if sender == "admin" and admin_id not in ADMIN_IDS:
-            return {"status": "error", "message": "Unauthorized"}
+    if not telegram_id or not message:
+        return {"status": "error", "message": "Missing parameters"}
 
+    if sender == "admin" and admin_id not in ADMIN_IDS:
+        return {"status": "error", "message": "Unauthorized"}
+
+    try:
         # Check last message BEFORE inserting (for auto-reply logic)
         should_auto_reply = False
         if sender == "user":
