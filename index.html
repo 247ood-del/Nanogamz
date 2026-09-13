@@ -18,7 +18,7 @@
     <button class="icon-btn" id="refreshBtn">⟳</button>
 </div>
 
-<!-- SEARCH PANEL (slide-down, inspired by IMAGIFHUB) -->
+<!-- SEARCH PANEL -->
 <div id="searchPanel" class="search-panel">
     <div class="search-panel-inner">
         <div class="search-container">
@@ -47,13 +47,10 @@
 <!-- Game Modal -->
 <div class="game-modal" id="gameModal">
     <div class="game-control-pill">
-        <!-- Save button -->
         <button id="saveBtn" class="pill-btn" title="Save/Unsave">🔖</button>
         <span class="pill-divider">|</span>
-        <!-- NEW Share button -->
         <button id="shareBtn" class="pill-btn" title="Share this game">🔗</button>
         <span class="pill-divider">|</span>
-        <!-- Close button -->
         <button id="modalClose" class="pill-btn" title="Close">✕</button>
     </div>
     <iframe id="gameIframe" allow="fullscreen" allowfullscreen></iframe>
@@ -62,13 +59,11 @@
 <!-- Side Menu -->
 <div class="menu-overlay" id="menuOverlay"></div>
 <div class="menu-panel" id="menuPanel">
-    <!-- Close Menu Button -->
     <div class="menu-header">
         <span class="menu-title">Menu</span>
         <button class="close-menu-btn" id="closeMenuBtn">✕</button>
     </div>
 
-    <!-- User Card -->
     <div class="user-card" id="userCard">
         <div class="top">
             <div class="avatar"><img id="userAvatar" src="assets/default-avatar.png" alt="avatar" /></div>
@@ -86,9 +81,7 @@
         </div>
     </div>
 
-    <!-- SAVED GAMES LINK (Underneath User Card) -->
     <a class="menu-link" id="savedGamesLink">📌 Saved Games</a>
-
     <a class="menu-link" id="shareLink">🔗 Share Bot with Friends</a>
     <a class="menu-link" href="https://t.me/nanogamz">📢 Channel</a>
     <a class="menu-link" id="supportLink">💬 Support</a>
@@ -140,11 +133,55 @@
     <div class="saved-header">
         <button class="back-btn" id="closeSavedOverlay">← Back</button>
         <h2>📌 Saved Games</h2>
-        <!-- REPLACED empty div with a refresh button -->
         <button class="icon-btn" id="refreshSavedBtn" style="font-size:20px;">⟳</button>
     </div>
     <div class="saved-grid-container" id="savedGridContainer">
         <div class="grid" id="savedGrid"></div>
+    </div>
+</div>
+
+<!-- SUPPORT CHAT OVERLAY -->
+<div class="support-overlay" id="supportOverlay">
+
+    <!-- USER CHAT VIEW -->
+    <div class="support-chat-view" id="supportChatView">
+        <div class="support-header">
+            <button class="back-btn" id="closeSupportChat">← Back</button>
+            <div class="support-title"><span>💬 Support</span></div>
+            <div style="width:60px;"></div>
+        </div>
+        <div class="support-messages" id="supportMessages"></div>
+        <div class="support-input-bar">
+            <input type="text" id="supportInput" placeholder="Type a message..." autocomplete="off" />
+            <button id="supportSendBtn" title="Send">➤</button>
+        </div>
+    </div>
+
+    <!-- ADMIN CONVERSATIONS LIST VIEW -->
+    <div class="support-list-view" id="supportListView" style="display:none;">
+        <div class="support-header">
+            <button class="back-btn" id="closeSupportList">← Back</button>
+            <div class="support-title"><span>💬 Support Inbox</span></div>
+            <div style="width:60px;"></div>
+        </div>
+        <div class="support-conversations" id="supportConversations"></div>
+    </div>
+
+    <!-- ADMIN INDIVIDUAL CHAT VIEW -->
+    <div class="support-chat-view" id="adminChatView" style="display:none;">
+        <div class="support-header">
+            <button class="back-btn" id="backToSupportList">← Back</button>
+            <div class="support-title">
+                <img id="adminChatAvatar" src="" alt="" />
+                <span id="adminChatName">User</span>
+            </div>
+            <div style="width:60px;"></div>
+        </div>
+        <div class="support-messages" id="adminChatMessages"></div>
+        <div class="support-input-bar">
+            <input type="text" id="adminChatInput" placeholder="Type a reply..." autocomplete="off" />
+            <button id="adminChatSendBtn" title="Send">➤</button>
+        </div>
     </div>
 </div>
 
