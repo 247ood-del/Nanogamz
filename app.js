@@ -110,7 +110,10 @@ const state = {
     adminListPolling: null,
     adminChatPolling: null,
     activeSupportUser: null,
-    activeSupportUserInfo: null
+    activeSupportUserInfo: null,
+    // Cached avatar data URL generated client-side (fallback when Telegram
+    // doesn't provide photo_url — which is most of the time)
+    myAvatarUrl: null
 };
 
 // ------------------------ TELEGRAM WEBAPP ------------------------
@@ -118,28 +121,45 @@ const tg = window.Telegram.WebApp;
 tg.ready();
 tg.expand();
 
+// Build a small data-URL avatar from the user's initial.
+// Cached so we only build it once per session.
+function buildInitialsAvatar(name) {
+    const initials = (name?.[0] || 'U').toUpperCase();
+    const canvas = document.createElement('canvas');
+    canvas.width = 96; canvas.height = 96;
+    const ctx = canvas.getContext('2d');
+    // Pick a stable colour from the name
+    const palette = ['#6c5ce7','#e17055','#00b894','#0984e3','#fd79a8','#fdcb6e','#a29bfe','#55efc4'];
+    let hash = 0;
+    for (let i = 0; i < (name || 'U').length; i++) hash = (hash * 31 + name.charCodeAt(i)) | 0;
+    ctx.fillStyle = palette[Math.abs(hash) % palette.length];
+    ctx.beginPath();
+    ctx.arc(48, 48, 48, 0, 2 * Math.PI);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 42px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(initials, 48, 52);
+    return canvas.toDataURL('image/png');
+}
+
+function getMyAvatarUrl() {
+    if (state.myAvatarUrl) return state.myAvatarUrl;
+    if (state.user?.photo_url) {
+        state.myAvatarUrl = state.user.photo_url;
+    } else {
+        state.myAvatarUrl = buildInitialsAvatar(state.user?.first_name || 'User');
+    }
+    return state.myAvatarUrl;
+}
+
 if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
     state.user = tg.initDataUnsafe.user;
     document.getElementById('userName').textContent = state.user.first_name || 'Player';
     document.getElementById('userId').textContent = `ID: ${state.user.id}`;
-    if (state.user.photo_url) {
-        document.getElementById('userAvatar').src = state.user.photo_url;
-    } else {
-        const initials = (state.user.first_name?.[0] || 'U') + (state.user.last_name?.[0] || '');
-        const canvas = document.createElement('canvas');
-        canvas.width = 100; canvas.height = 100;
-        const ctx = canvas.getContext('2d');
-        ctx.fillStyle = state.theme.accent;
-        ctx.beginPath();
-        ctx.arc(50,50,50,0,2*Math.PI);
-        ctx.fill();
-        ctx.fillStyle = '#fff';
-        ctx.font = 'bold 40px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(initials || 'U', 50, 52);
-        document.getElementById('userAvatar').src = canvas.toDataURL();
-    }
+
+    document.getElementById('userAvatar').src = getMyAvatarUrl();
 
     fetchUserSavedGameIds();
     checkAdminStatus();
@@ -739,7 +759,7 @@ document.querySelectorAll('.modal-overlay').forEach(overlay => {
     });
 });
 
-// ==================== SUPPORT LINK (REPLACED – opens in-app overlay) ====================
+// ==================== SUPPORT LINK (opens in-app overlay) ====================
 document.getElementById('supportLink').addEventListener('click', (e) => {
     e.preventDefault();
     toggleMenu();
@@ -1073,6 +1093,15 @@ savedGridContainer.addEventListener('scroll', () => {
 //  SUPPORT CHAT  (USER VIEW + ADMIN VIEW)
 // =============================================================================
 
+// Cache last-rendered payload so polling only re-renders when data actually
+// changes. This is what stops the "blinking" that comes from blowing away
+// innerHTML every few seconds.
+const lastRendered = {
+    conversations: '',
+    userChat: '',
+    adminChat: ''
+};
+
 async function checkAdminStatus() {
     if (!state.user || !state.user.id) return;
     try {
@@ -1111,6 +1140,9 @@ function closeSupport() {
     stopAllSupportPolling();
     state.activeSupportUser = null;
     state.activeSupportUserInfo = null;
+    lastRendered.conversations = '';
+    lastRendered.userChat = '';
+    lastRendered.adminChat = '';
 }
 
 function stopAllSupportPolling() {
@@ -1166,6 +1198,12 @@ async function loadSupportMessages(silent = false) {
 
 function renderSupportMessages(msgs) {
     if (!supportMessages) return;
+
+    // Skip re-render if nothing changed (prevents flicker)
+    const payload = JSON.stringify(msgs.map(m => [m.id, m.message, m.created_at, m.sender]));
+    if (payload === lastRendered.userChat) return;
+    lastRendered.userChat = payload;
+
     if (!msgs.length) {
         supportMessages.innerHTML = `
             <div class="support-empty">
@@ -1207,9 +1245,13 @@ async function sendSupportMessage() {
                 sender: 'user',
                 first_name: state.user.first_name || '',
                 username: state.user.username || '',
-                photo_url: state.user.photo_url || ''
+                // Send the client-generated avatar fallback so admins always
+                // see something recognisable, even when Telegram omits photo_url.
+                photo_url: getMyAvatarUrl()
             })
         });
+        // Force reload by clearing the cache key
+        lastRendered.userChat = '';
         await loadSupportMessages();
     } catch (e) {
         showToast('Failed to send message.', 'error');
@@ -1239,18 +1281,30 @@ async function loadSupportConversations() {
 
 function renderSupportConversations(convos) {
     if (!supportConversations) return;
+
+    // Skip re-render if nothing changed (prevents flicker)
+    const payload = JSON.stringify(convos.map(c => [
+        c.telegram_id, c.first_name, c.photo_url, c.last_message,
+        c.last_message_at, c.last_sender, c.unread_count
+    ]));
+    if (payload === lastRendered.conversations) return;
+    lastRendered.conversations = payload;
+
     if (!convos.length) {
         supportConversations.innerHTML = '<div class="saved-empty-state">No conversations yet</div>';
         return;
     }
+
     supportConversations.innerHTML = convos.map(c => {
         const preview = (c.last_message || '').slice(0, 60);
-        const avatarSrc = c.photo_url || 'https://via.placeholder.com/96/333/666?text=?';
+        // Use the user's real photo if we have one, otherwise draw initials
+        // client-side (no external request, no flicker).
+        const avatarSrc = c.photo_url || buildInitialsAvatar(c.first_name || 'User');
         const unreadHtml = c.unread_count > 0 ? `<span class="support-unread">${c.unread_count}</span>` : '';
         const senderPrefix = c.last_sender === 'admin' ? '<span style="opacity:0.5">You: </span>' : '';
         return `
             <div class="support-convo" data-tid="${c.telegram_id}">
-                <img class="support-avatar" src="${avatarSrc}" alt="" onerror="this.src='https://via.placeholder.com/96/333/666?text=?'" />
+                <img class="support-avatar" src="${avatarSrc}" alt="" />
                 <div class="support-convo-body">
                     <div class="support-convo-top">
                         <span class="support-convo-name">${escapeHtml(c.first_name)}</span>
@@ -1276,12 +1330,15 @@ function renderSupportConversations(convos) {
 async function openAdminChat(telegramId, convo) {
     state.activeSupportUser = telegramId;
     state.activeSupportUserInfo = convo || null;
+    lastRendered.adminChat = '';
 
     supportListView.style.display = 'none';
     adminChatView.style.display = 'flex';
     adminChatName.textContent = convo?.first_name || 'User';
-    adminChatAvatar.src = convo?.photo_url || 'https://via.placeholder.com/64/333/666?text=?';
-    adminChatAvatar.onerror = () => { adminChatAvatar.src = 'https://via.placeholder.com/64/333/666?text=?'; };
+
+    // Same fallback: initials if no photo
+    const avatarSrc = convo?.photo_url || buildInitialsAvatar(convo?.first_name || 'User');
+    adminChatAvatar.src = avatarSrc;
 
     await loadAdminChatMessages(telegramId);
     await fetch(`${BACKEND_URL}/api/support/mark-read`, {
@@ -1298,6 +1355,12 @@ async function loadAdminChatMessages(telegramId, silent = false) {
         const resp = await fetch(`${BACKEND_URL}/api/support/messages?telegram_id=${telegramId}`);
         const data = await resp.json();
         const msgs = data.messages || [];
+
+        // Skip re-render if nothing changed (prevents flicker)
+        const payload = JSON.stringify(msgs.map(m => [m.id, m.message, m.created_at, m.sender]));
+        if (payload === lastRendered.adminChat) return;
+        lastRendered.adminChat = payload;
+
         adminChatMessages.innerHTML = msgs.map(m => {
             const isMine = m.sender === 'admin';
             return `<div class="support-bubble ${isMine ? 'mine' : 'theirs'}">
@@ -1333,6 +1396,7 @@ async function sendAdminReply() {
                 admin_id: state.user.id
             })
         });
+        lastRendered.adminChat = '';
         await loadAdminChatMessages(state.activeSupportUser);
     } catch (e) {
         showToast('Failed to send reply.', 'error');
@@ -1352,8 +1416,11 @@ backToSupportList.addEventListener('click', () => {
     if (state.adminChatPolling) { clearInterval(state.adminChatPolling); state.adminChatPolling = null; }
     state.activeSupportUser = null;
     state.activeSupportUserInfo = null;
+    lastRendered.adminChat = '';
     adminChatView.style.display = 'none';
     supportListView.style.display = 'flex';
+    // Force list refresh since state may have changed
+    lastRendered.conversations = '';
     loadSupportConversations();
     startAdminListPolling();
 });
