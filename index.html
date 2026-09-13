@@ -84,7 +84,7 @@
     <a class="menu-link" id="savedGamesLink">📌 Saved Games</a>
     <a class="menu-link" id="shareLink">🔗 Share Bot with Friends</a>
     <a class="menu-link" href="https://t.me/nanogamz">📢 Channel</a>
-    <a class="menu-link" id="supportLink">💬 Support</a>
+    <a class="menu-link" id="supportLink">💬 Support <span class="menu-badge" id="supportBadge">0</span></a>
     <a class="menu-link" id="copyrightLink">⚖️ Copyright Policy</a>
     <a class="menu-link" id="privacyLink">🔒 Privacy Policy</a>
 
@@ -152,8 +152,10 @@
         </div>
         <div class="support-messages" id="supportMessages"></div>
         <div class="support-input-bar">
+            <button id="supportClipBtn" class="clip-btn" title="Send image" type="button">📎</button>
+            <input type="file" id="supportImageInput" accept="image/*" style="display:none;" />
             <input type="text" id="supportInput" placeholder="Type a message..." autocomplete="off" />
-            <button id="supportSendBtn" title="Send">➤</button>
+            <button id="supportSendBtn" title="Send" type="button">➤</button>
         </div>
     </div>
 
@@ -179,10 +181,31 @@
         </div>
         <div class="support-messages" id="adminChatMessages"></div>
         <div class="support-input-bar">
+            <button id="adminClipBtn" class="clip-btn" title="Send image" type="button">📎</button>
+            <input type="file" id="adminImageInput" accept="image/*" style="display:none;" />
             <input type="text" id="adminChatInput" placeholder="Type a reply..." autocomplete="off" />
-            <button id="adminChatSendBtn" title="Send">➤</button>
+            <button id="adminChatSendBtn" title="Send" type="button">➤</button>
         </div>
     </div>
+</div>
+
+<!-- Link Options Modal (Copy / Open) -->
+<div class="link-options-modal" id="linkOptionsModal">
+    <div class="link-options-content">
+        <div class="link-options-title">Link options</div>
+        <div class="link-options-url" id="linkOptionsUrl"></div>
+        <div class="link-options-buttons">
+            <button class="link-opt-btn" id="linkOptionCopy" type="button">📋 Copy</button>
+            <button class="link-opt-btn" id="linkOptionOpen" type="button">🔗 Open</button>
+        </div>
+        <button class="link-options-cancel" id="linkOptionCancel" type="button">Cancel</button>
+    </div>
+</div>
+
+<!-- Image Preview Modal -->
+<div class="image-preview-modal" id="imagePreviewModal">
+    <button class="image-preview-close" id="imagePreviewClose" type="button">✕</button>
+    <img id="imagePreviewImg" src="" alt="preview" />
 </div>
 
 <!-- Toast Container -->
