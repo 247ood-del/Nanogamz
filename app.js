@@ -1401,7 +1401,11 @@ safeOn('imagePreviewModal', 'click', (e) => {
 // -------------------- IMAGE COMPRESSION + UPLOAD --------------------
 // Downscale + JPEG-compress so that even big photos land around a few
 // hundred KB of base64 in the DB. This keeps polling light.
-function compressImage(file, maxDim = 800, quality = 0.72) {
+//
+// ✅ FIX 1: maxDim lowered 800 -> 600 and quality 0.72 -> 0.55. This keeps
+// the resulting base64 string well under backend payload limits
+// (Render / Vercel / FastAPI default body size), preventing 413 errors.
+function compressImage(file, maxDim = 600, quality = 0.55) {
     return new Promise((resolve) => {
         const reader = new FileReader();
         
@@ -1477,8 +1481,10 @@ function setupImageUpload(clipBtnId, inputId, senderType) {
             showToast('Only image files are allowed.', 'error');
             return;
         }
-        if (file.size > 3 * 1024 * 1024) {
-            showToast('Image must be under 3MB.', 'error');
+        // ✅ FIX 2: Pre-validation reduced from 3MB -> 2MB so the compressed
+        // base64 string never balloons past backend payload limits.
+        if (file.size > 2 * 1024 * 1024) {
+            showToast('Image must be under 2MB.', 'error');
             return;
         }
 
@@ -1513,7 +1519,7 @@ async function sendImageMessage(dataUrl, sender) {
         if (supportMessages) supportMessages.scrollTop = supportMessages.scrollHeight;
 
         try {
-            await fetch(`${BACKEND_URL}/api/support/send`, {
+            const resp = await fetch(`${BACKEND_URL}/api/support/send`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -1525,6 +1531,13 @@ async function sendImageMessage(dataUrl, sender) {
                     photo_url: getMyAvatarUrl()
                 })
             });
+            // ✅ Surface a clearer error if the server rejected the payload
+            if (resp.status === 413) {
+                const opt = supportMessages?.querySelector(`[data-msg-id="${optimisticId}"]`);
+                if (opt) opt.remove();
+                showToast('Image too large. Please pick a smaller one.', 'error');
+                return;
+            }
             const opt = supportMessages?.querySelector(`[data-msg-id="${optimisticId}"]`);
             if (opt) opt.remove();
             await loadSupportMessages();
@@ -1547,7 +1560,7 @@ async function sendImageMessage(dataUrl, sender) {
         if (adminChatMessages) adminChatMessages.scrollTop = adminChatMessages.scrollHeight;
 
         try {
-            await fetch(`${BACKEND_URL}/api/support/send`, {
+            const resp = await fetch(`${BACKEND_URL}/api/support/send`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -1557,6 +1570,12 @@ async function sendImageMessage(dataUrl, sender) {
                     admin_id: state.user.id
                 })
             });
+            if (resp.status === 413) {
+                const opt = adminChatMessages?.querySelector(`[data-msg-id="${optimisticId}"]`);
+                if (opt) opt.remove();
+                showToast('Image too large. Please pick a smaller one.', 'error');
+                return;
+            }
             const opt = adminChatMessages?.querySelector(`[data-msg-id="${optimisticId}"]`);
             if (opt) opt.remove();
             await loadAdminChatMessages(state.activeSupportUser);
