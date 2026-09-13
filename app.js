@@ -80,6 +80,14 @@ function formatTime(iso) {
     }
 }
 
+// Defensive listener helper – prevents crashes when HTML is stale/cached
+// and an element referenced by JS no longer exists.
+function safeOn(id, event, handler, options) {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener(event, handler, options);
+    return el;
+}
+
 // ------------------------ STATE ------------------------
 const state = {
     currentCategory: '🔥 Discover',
@@ -109,6 +117,9 @@ const state = {
     supportPolling: null,
     adminListPolling: null,
     adminChatPolling: null,
+    // NEW: user-side unread-count poller (kept inside state so there is no
+    // Temporal Dead Zone risk at module init – see previous crash).
+    userUnreadPolling: null,
     activeSupportUser: null,
     activeSupportUserInfo: null,
     // Cached avatar data URL generated client-side (fallback when Telegram
@@ -117,9 +128,13 @@ const state = {
 };
 
 // ------------------------ TELEGRAM WEBAPP ------------------------
-const tg = window.Telegram.WebApp;
-tg.ready();
-tg.expand();
+// Use optional chaining so a missing/failed telegram-web-app.js script
+// cannot crash the whole app.
+const tg = (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
+if (tg) {
+    try { tg.ready(); } catch (e) { /* ignore */ }
+    try { tg.expand(); } catch (e) { /* ignore */ }
+}
 
 // Build a small data-URL avatar from the user's initial.
 // Cached so we only build it once per session.
@@ -154,12 +169,14 @@ function getMyAvatarUrl() {
     return state.myAvatarUrl;
 }
 
-if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
+if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) {
     state.user = tg.initDataUnsafe.user;
-    document.getElementById('userName').textContent = state.user.first_name || 'Player';
-    document.getElementById('userId').textContent = `ID: ${state.user.id}`;
-
-    document.getElementById('userAvatar').src = getMyAvatarUrl();
+    const nameEl = document.getElementById('userName');
+    if (nameEl) nameEl.textContent = state.user.first_name || 'Player';
+    const idEl = document.getElementById('userId');
+    if (idEl) idEl.textContent = `ID: ${state.user.id}`;
+    const avEl = document.getElementById('userAvatar');
+    if (avEl) avEl.src = getMyAvatarUrl();
 
     fetchUserSavedGameIds();
     checkAdminStatus();
@@ -216,21 +233,21 @@ const searchSubmitBtn = document.getElementById('searchSubmitBtn');
 let searchOpen = false;
 
 function openSearch() {
-    if (searchOpen) return;
+    if (searchOpen || !searchPanel) return;
     searchPanel.classList.add('open');
     document.body.classList.add('search-open');
     searchOpen = true;
-    searchToggle.textContent = '✕';
-    setTimeout(() => searchInput.focus(), 100);
+    if (searchToggle) searchToggle.textContent = '✕';
+    setTimeout(() => searchInput && searchInput.focus(), 100);
 }
 
 function closeSearch() {
-    if (!searchOpen) return;
+    if (!searchOpen || !searchPanel) return;
     searchPanel.classList.remove('open');
     document.body.classList.remove('search-open');
     searchOpen = false;
-    searchToggle.textContent = '🔍';
-    searchInput.value = '';
+    if (searchToggle) searchToggle.textContent = '🔍';
+    if (searchInput) searchInput.value = '';
 }
 
 function resetSearch() {
@@ -256,7 +273,7 @@ function toggleSearch() {
 }
 
 function performSearch() {
-    const query = searchInput.value.trim();
+    const query = (searchInput?.value || '').trim();
     closeSearch();
     state.searchQuery = query;
     state.offset = 0;
@@ -266,17 +283,19 @@ function performSearch() {
     loadGames(true);
 }
 
-searchToggle.addEventListener('click', toggleSearch);
-searchSubmitBtn.addEventListener('click', performSearch);
-searchInput.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') {
-        e.preventDefault();
-        performSearch();
-    }
-});
+if (searchToggle) searchToggle.addEventListener('click', toggleSearch);
+if (searchSubmitBtn) searchSubmitBtn.addEventListener('click', performSearch);
+if (searchInput) {
+    searchInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            performSearch();
+        }
+    });
+}
 
 document.addEventListener('click', (e) => {
-    if (searchOpen && !searchPanel.contains(e.target) && e.target !== searchToggle) {
+    if (searchOpen && searchPanel && !searchPanel.contains(e.target) && e.target !== searchToggle) {
         resetSearch();
     }
 });
@@ -314,6 +333,7 @@ const COLORS = [
 
 function populatePalette(mode) {
     const container = document.getElementById('colorPalette');
+    if (!container) return;
     container.innerHTML = COLORS.map(c => `
         <div class="color-swatch" style="background:${c}" data-color="${c}"></div>
     `).join('');
@@ -369,6 +389,8 @@ async function initAdCarousel() {
         // silent fallback – keep using ADS
     }
 
+    if (!adWrapper) return;
+
     adWrapper.innerHTML = adsToUse.map(ad => `
         <div class="swiper-slide">
             <a href="${ad.link}" target="_blank" rel="noopener">
@@ -381,20 +403,28 @@ async function initAdCarousel() {
         state.swiperAd.destroy(true, true);
     }
 
-    state.swiperAd = new Swiper('#adCarousel', {
-        loop: true,
-        autoplay: { delay: 4000, disableOnInteraction: false },
-        speed: 800,
-        slidesPerView: 1,
-        spaceBetween: 0,
-        effect: 'slide',
-    });
+    // Guard: if Swiper CDN failed to load (blocked network etc.)
+    if (typeof Swiper === 'undefined') return;
+
+    try {
+        state.swiperAd = new Swiper('#adCarousel', {
+            loop: true,
+            autoplay: { delay: 4000, disableOnInteraction: false },
+            speed: 800,
+            slidesPerView: 1,
+            spaceBetween: 0,
+            effect: 'slide',
+        });
+    } catch (e) {
+        console.warn('Swiper init failed:', e);
+    }
 }
 
 initAdCarousel();
 
 // ------------------------ CATEGORY BAR ------------------------
 function renderCategories() {
+    if (!catBar) return;
     catBar.innerHTML = CATEGORIES.map(cat => `
         <button class="cat-btn ${cat === state.currentCategory ? 'active' : ''}" data-cat="${cat}">${cat}</button>
     `).join('');
@@ -437,6 +467,7 @@ async function fetchGames(category, offset, limit, search = '', seed = null) {
 // ------------------------ RENDER GAMES ------------------------
 function renderGames(games, append = false) {
     const container = grid;
+    if (!container) return;
     if (!append) container.innerHTML = '';
     const fragment = document.createDocumentFragment();
     games.forEach(game => {
@@ -460,7 +491,7 @@ async function loadGames(reset = false) {
     if (state.loading || (!state.hasMore && !reset)) return;
     state.loading = true;
 
-    if (reset) {
+    if (reset && grid) {
         grid.innerHTML = '';
         for (let i = 0; i < 6; i++) {
             const skel = document.createElement('div');
@@ -496,11 +527,13 @@ async function loadGames(reset = false) {
 }
 
 // ------------------------ INFINITE SCROLL ------------------------
-gridContainer.addEventListener('scroll', () => {
-    if (gridContainer.scrollTop + gridContainer.clientHeight >= gridContainer.scrollHeight - 100) {
-        if (!state.loading && state.hasMore) loadGames(false);
-    }
-});
+if (gridContainer) {
+    gridContainer.addEventListener('scroll', () => {
+        if (gridContainer.scrollTop + gridContainer.clientHeight >= gridContainer.scrollHeight - 100) {
+            if (!state.loading && state.hasMore) loadGames(false);
+        }
+    });
+}
 
 // ==================== PARALLAX AD COLLAPSE ====================
 let lastScrollTop = 0;
@@ -517,40 +550,44 @@ function resetAdOffset() {
 }
 
 function updateAdPosition(offset) {
-    adCarousel.style.transform = `translateY(-${offset}px)`;
-    catBar.style.top = `${TOP_BAR_HEIGHT + AD_HEIGHT - offset}px`;
-    gridContainer.style.top = `${TOP_BAR_HEIGHT + AD_HEIGHT + CAT_BAR_HEIGHT - offset}px`;
+    if (adCarousel) adCarousel.style.transform = `translateY(-${offset}px)`;
+    if (catBar) catBar.style.top = `${TOP_BAR_HEIGHT + AD_HEIGHT - offset}px`;
+    if (gridContainer) gridContainer.style.top = `${TOP_BAR_HEIGHT + AD_HEIGHT + CAT_BAR_HEIGHT - offset}px`;
 }
 
 let ticking = false;
-gridContainer.addEventListener('scroll', () => {
-    if (!ticking) {
-        window.requestAnimationFrame(() => {
-            const scrollTop = gridContainer.scrollTop;
-            const delta = scrollTop - lastScrollTop;
-            lastScrollTop = scrollTop;
-            adOffset = Math.min(Math.max(adOffset + (delta * SCROLL_RATIO), 0), AD_HEIGHT);
-            updateAdPosition(adOffset);
-            ticking = false;
-        });
-        ticking = true;
-    }
-});
+if (gridContainer) {
+    gridContainer.addEventListener('scroll', () => {
+        if (!ticking) {
+            window.requestAnimationFrame(() => {
+                const scrollTop = gridContainer.scrollTop;
+                const delta = scrollTop - lastScrollTop;
+                lastScrollTop = scrollTop;
+                adOffset = Math.min(Math.max(adOffset + (delta * SCROLL_RATIO), 0), AD_HEIGHT);
+                updateAdPosition(adOffset);
+                ticking = false;
+            });
+            ticking = true;
+        }
+    });
+}
 
 resetAdOffset();
 
 // ------------------------ REFRESH ------------------------
-refreshBtn.addEventListener('click', () => {
-    if (state.searchQuery) {
-        resetSearch();
-    } else {
-        state.offset = 0;
-        state.hasMore = true;
-        state.games = [];
-        generateNewSeed();
-        loadGames(true);
-    }
-});
+if (refreshBtn) {
+    refreshBtn.addEventListener('click', () => {
+        if (state.searchQuery) {
+            resetSearch();
+        } else {
+            state.offset = 0;
+            state.hasMore = true;
+            state.games = [];
+            generateNewSeed();
+            loadGames(true);
+        }
+    });
+}
 
 // ------------------------ GAME MODAL ------------------------
 let activeModalGame = null;
@@ -646,8 +683,8 @@ async function openGame(game) {
 
     activeModalGame = game;
     syncSavedState(game.id);
-    gameIframe.src = game.playable_url;
-    gameModal.classList.add('active');
+    if (gameIframe) gameIframe.src = game.playable_url;
+    if (gameModal) gameModal.classList.add('active');
 
     recordRecentGame(game.id);
 
@@ -658,41 +695,46 @@ async function openGame(game) {
 }
 
 function closeGameModal() {
-    gameModal.classList.remove('active');
-    gameIframe.src = '';
+    if (gameModal) gameModal.classList.remove('active');
+    if (gameIframe) gameIframe.src = '';
     resetPillPosition();
 }
 
-modalClose.addEventListener('click', closeGameModal);
+if (modalClose) modalClose.addEventListener('click', closeGameModal);
 
-gameModal.addEventListener('click', (e) => {
-    if (e.target === gameModal) {
-        closeGameModal();
-    }
-});
+if (gameModal) {
+    gameModal.addEventListener('click', (e) => {
+        if (e.target === gameModal) {
+            closeGameModal();
+        }
+    });
+}
 
 // ------------------------ SIDE MENU ------------------------
 function toggleMenu() {
+    if (!menuPanel) return;
     const isOpen = menuPanel.classList.contains('open');
     menuPanel.classList.toggle('open');
-    menuOverlay.classList.toggle('active');
+    if (menuOverlay) menuOverlay.classList.toggle('active');
     document.body.style.overflow = isOpen ? '' : 'hidden';
     if (!isOpen) {
         renderRecentGames();
     }
 }
-menuToggle.addEventListener('click', toggleMenu);
-menuOverlay.addEventListener('click', toggleMenu);
+if (menuToggle) menuToggle.addEventListener('click', toggleMenu);
+if (menuOverlay) menuOverlay.addEventListener('click', toggleMenu);
 
-closeMenuBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    if (menuPanel.classList.contains('open')) {
-        toggleMenu();
-    }
-});
+if (closeMenuBtn) {
+    closeMenuBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (menuPanel.classList.contains('open')) {
+            toggleMenu();
+        }
+    });
+}
 
 // ==================== SHARE BOT ====================
-document.getElementById('shareLink').addEventListener('click', async (e) => {
+safeOn('shareLink', 'click', async (e) => {
     e.preventDefault();
     const shareText = '🎮 Play instant games on Nanogamz – your pocket gaming hub!';
     const botLink = 'https://t.me/Nanogamz_bot';
@@ -708,10 +750,12 @@ document.getElementById('shareLink').addEventListener('click', async (e) => {
 // ==================== COPY USER ID ====================
 function copyUserId() {
     const userIdEl = document.getElementById('userId');
+    if (!userIdEl) return;
     const userId = userIdEl.textContent.replace('ID: ', '').trim();
     if (userId && userId !== '-') {
         navigator.clipboard.writeText(userId).then(() => {
             const btn = document.getElementById('copyIdBtn');
+            if (!btn) return;
             const original = btn.textContent;
             btn.textContent = '✅';
             setTimeout(() => { btn.textContent = original; }, 1500);
@@ -721,36 +765,40 @@ function copyUserId() {
     }
 }
 
-document.getElementById('copyIdBtn').addEventListener('click', copyUserId);
+safeOn('copyIdBtn', 'click', copyUserId);
 
 // ==================== COPYRIGHT & PRIVACY MODALS ====================
 function openCopyright() {
-    document.getElementById('copyrightModal').classList.add('active');
+    const m = document.getElementById('copyrightModal');
+    if (m) m.classList.add('active');
 }
 function closeCopyright() {
-    document.getElementById('copyrightModal').classList.remove('active');
+    const m = document.getElementById('copyrightModal');
+    if (m) m.classList.remove('active');
 }
 
 function openPrivacy() {
-    document.getElementById('privacyModal').classList.add('active');
+    const m = document.getElementById('privacyModal');
+    if (m) m.classList.add('active');
 }
 function closePrivacy() {
-    document.getElementById('privacyModal').classList.remove('active');
+    const m = document.getElementById('privacyModal');
+    if (m) m.classList.remove('active');
 }
 
-document.getElementById('copyrightLink').addEventListener('click', (e) => {
+safeOn('copyrightLink', 'click', (e) => {
     e.preventDefault();
     toggleMenu();
     openCopyright();
 });
-document.getElementById('privacyLink').addEventListener('click', (e) => {
+safeOn('privacyLink', 'click', (e) => {
     e.preventDefault();
     toggleMenu();
     openPrivacy();
 });
 
-document.getElementById('copyrightClose').addEventListener('click', closeCopyright);
-document.getElementById('privacyClose').addEventListener('click', closePrivacy);
+safeOn('copyrightClose', 'click', closeCopyright);
+safeOn('privacyClose', 'click', closePrivacy);
 
 document.querySelectorAll('.modal-overlay').forEach(overlay => {
     overlay.addEventListener('click', (e) => {
@@ -761,7 +809,7 @@ document.querySelectorAll('.modal-overlay').forEach(overlay => {
 });
 
 // ==================== SUPPORT LINK (opens in-app overlay) ====================
-document.getElementById('supportLink').addEventListener('click', (e) => {
+safeOn('supportLink', 'click', (e) => {
     e.preventDefault();
     toggleMenu();
     openSupport();
@@ -769,56 +817,61 @@ document.getElementById('supportLink').addEventListener('click', (e) => {
 
 // ==================== PILL CONTROLS ====================
 async function syncSavedState(gameId) {
+    if (!saveBtn) return;
     const isSaved = state.savedGameIds.has(String(gameId));
     saveBtn.textContent = isSaved ? '📑' : '🔖';
     saveBtn.title = isSaved ? 'Delete from Saved' : 'Save Game';
 }
 
-saveBtn.addEventListener('click', async (e) => {
-    e.stopPropagation();
-    if (!activeModalGame || !state.user) {
-        alert('Please open the app inside Telegram to save games.');
-        return;
-    }
-    const gId = String(activeModalGame.id);
-    try {
-        const resp = await fetch(`${BACKEND_URL}/toggle-save-game`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ telegram_id: state.user.id, game_id: gId })
-        });
-        const data = await resp.json();
-        if (data.status === 'success') {
-            state.savedGameIds = new Set(data.saved_games.map(String));
-            syncSavedState(gId);
-            const message = data.is_saved ? 'Game saved!' : 'Game removed from saved.';
-            showToast(message, 'success');
-
-            if (savedOverlay.classList.contains('active')) {
-                state.savedOffset = 0;
-                state.savedHasMore = true;
-                loadSavedGames(true);
-            }
-        } else {
-            showToast('Failed to update saved games.', 'error');
+if (saveBtn) {
+    saveBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!activeModalGame || !state.user) {
+            alert('Please open the app inside Telegram to save games.');
+            return;
         }
-    } catch (err) {
-        console.error('Failed to toggle save state', err);
-        showToast('Network error. Please try again.', 'error');
-    }
-});
+        const gId = String(activeModalGame.id);
+        try {
+            const resp = await fetch(`${BACKEND_URL}/toggle-save-game`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ telegram_id: state.user.id, game_id: gId })
+            });
+            const data = await resp.json();
+            if (data.status === 'success') {
+                state.savedGameIds = new Set(data.saved_games.map(String));
+                syncSavedState(gId);
+                const message = data.is_saved ? 'Game saved!' : 'Game removed from saved.';
+                showToast(message, 'success');
+
+                if (savedOverlay && savedOverlay.classList.contains('active')) {
+                    state.savedOffset = 0;
+                    state.savedHasMore = true;
+                    loadSavedGames(true);
+                }
+            } else {
+                showToast('Failed to update saved games.', 'error');
+            }
+        } catch (err) {
+            console.error('Failed to toggle save state', err);
+            showToast('Network error. Please try again.', 'error');
+        }
+    });
+}
 
 // ==================== SHARE GAME ====================
 const BOT_USERNAME = 'Nanogamz_bot';
 
-shareBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    if (!activeModalGame) {
-        showToast('No game loaded to share.', 'error');
-        return;
-    }
-    shareGame(activeModalGame.id);
-});
+if (shareBtn) {
+    shareBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (!activeModalGame) {
+            showToast('No game loaded to share.', 'error');
+            return;
+        }
+        shareGame(activeModalGame.id);
+    });
+}
 
 async function shareGame(gameId) {
     const deepLink = `https://t.me/${BOT_USERNAME}?startapp=${gameId}`;
@@ -843,8 +896,8 @@ async function shareGame(gameId) {
 
 // ==================== DEEP LINK HANDLER ====================
 async function handleDeepLink() {
-    if (!window.Telegram || !Telegram.WebApp) return;
-    const startParam = Telegram.WebApp.initDataUnsafe?.start_param;
+    if (!tg) return;
+    const startParam = tg.initDataUnsafe?.start_param;
     if (!startParam) return;
 
     try {
@@ -964,6 +1017,8 @@ async function loadSavedGames(reset = false) {
     if (state.loadingSaved || (!state.savedHasMore && !reset)) return;
     state.loadingSaved = true;
 
+    if (!savedGrid) { state.loadingSaved = false; return; }
+
     if (reset) {
         savedGrid.innerHTML = '';
         state.savedOffset = 0;
@@ -1062,15 +1117,15 @@ document.addEventListener('click', () => {
     document.querySelectorAll('.card-dropdown.show').forEach(d => d.classList.remove('show'));
 });
 
-savedGamesLink.addEventListener('click', (e) => {
+safeOn('savedGamesLink', 'click', (e) => {
     e.preventDefault();
     toggleMenu();
-    savedOverlay.classList.add('active');
+    if (savedOverlay) savedOverlay.classList.add('active');
     loadSavedGames(true);
 });
 
-closeSavedOverlay.addEventListener('click', () => {
-    savedOverlay.classList.remove('active');
+safeOn('closeSavedOverlay', 'click', () => {
+    if (savedOverlay) savedOverlay.classList.remove('active');
 });
 
 if (refreshSavedBtn) {
@@ -1082,13 +1137,15 @@ if (refreshSavedBtn) {
     });
 }
 
-savedGridContainer.addEventListener('scroll', () => {
-    if (savedGridContainer.scrollTop + savedGridContainer.clientHeight >= savedGridContainer.scrollHeight - 100) {
-        if (!state.loadingSaved && state.savedHasMore) {
-            loadSavedGames(false);
+if (savedGridContainer) {
+    savedGridContainer.addEventListener('scroll', () => {
+        if (savedGridContainer.scrollTop + savedGridContainer.clientHeight >= savedGridContainer.scrollHeight - 100) {
+            if (!state.loadingSaved && state.savedHasMore) {
+                loadSavedGames(false);
+            }
         }
-    }
-});
+    });
+}
 
 // =============================================================================
 //  SUPPORT CHAT  (USER VIEW + ADMIN VIEW)
@@ -1163,29 +1220,31 @@ function linkifyMessage(text) {
 // Robust clipboard copy with fallback for older webviews.
 async function copyToClipboard(text) {
     try {
-        await navigator.clipboard.writeText(text);
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(text);
+            return true;
+        }
+    } catch { /* fall through */ }
+    try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
         return true;
     } catch {
-        try {
-            const ta = document.createElement('textarea');
-            ta.value = text;
-            ta.style.position = 'fixed';
-            ta.style.opacity = '0';
-            ta.style.left = '-9999px';
-            document.body.appendChild(ta);
-            ta.select();
-            document.execCommand('copy');
-            document.body.removeChild(ta);
-            return true;
-        } catch {
-            return false;
-        }
+        return false;
     }
 }
 
 // Append a single bubble (text or image) with its copy button.
 // `role` is 'user' or 'admin' — it determines which sender means "mine".
 function appendSupportBubble(container, msg, role) {
+    if (!container) return;
     const isMine = role === 'user' ? msg.sender === 'user' : msg.sender === 'admin';
 
     const row = document.createElement('div');
@@ -1268,19 +1327,23 @@ let activeLinkUrl = '';
 
 function showLinkOptions(url) {
     activeLinkUrl = url;
-    document.getElementById('linkOptionsUrl').textContent = url;
-    document.getElementById('linkOptionsModal').classList.add('active');
+    const urlEl = document.getElementById('linkOptionsUrl');
+    if (urlEl) urlEl.textContent = url;
+    const modal = document.getElementById('linkOptionsModal');
+    if (modal) modal.classList.add('active');
 }
 
-document.getElementById('linkOptionCopy').addEventListener('click', async () => {
+safeOn('linkOptionCopy', 'click', async () => {
     const ok = await copyToClipboard(activeLinkUrl);
-    document.getElementById('linkOptionsModal').classList.remove('active');
+    const modal = document.getElementById('linkOptionsModal');
+    if (modal) modal.classList.remove('active');
     showToast(ok ? '📋 Link copied' : 'Failed to copy', ok ? 'success' : 'error', 1500);
 });
 
-document.getElementById('linkOptionOpen').addEventListener('click', () => {
+safeOn('linkOptionOpen', 'click', () => {
     const url = activeLinkUrl;
-    document.getElementById('linkOptionsModal').classList.remove('active');
+    const modal = document.getElementById('linkOptionsModal');
+    if (modal) modal.classList.remove('active');
     try {
         if (window.Telegram?.WebApp?.openLink) {
             Telegram.WebApp.openLink(url);
@@ -1292,42 +1355,37 @@ document.getElementById('linkOptionOpen').addEventListener('click', () => {
     }
 });
 
-document.getElementById('linkOptionCancel').addEventListener('click', () => {
-    document.getElementById('linkOptionsModal').classList.remove('active');
+safeOn('linkOptionCancel', 'click', () => {
+    const modal = document.getElementById('linkOptionsModal');
+    if (modal) modal.classList.remove('active');
 });
 
-document.getElementById('linkOptionsModal').addEventListener('click', (e) => {
-    if (e.target.id === 'linkOptionsModal') {
+safeOn('linkOptionsModal', 'click', (e) => {
+    if (e.target && e.target.id === 'linkOptionsModal') {
         e.target.classList.remove('active');
     }
 });
 
 // -------------------- IMAGE PREVIEW MODAL --------------------
 function openImagePreview(src) {
-    document.getElementById('imagePreviewImg').src = src;
-    document.getElementById('imagePreviewModal').classList.add('active');
+    const img = document.getElementById('imagePreviewImg');
+    if (img) img.src = src;
+    const modal = document.getElementById('imagePreviewModal');
+    if (modal) modal.classList.add('active');
 }
 
-document.getElementById('imagePreviewClose').addEventListener('click', () => {
-    document.getElementById('imagePreviewModal').classList.remove('active');
+safeOn('imagePreviewClose', 'click', () => {
+    const modal = document.getElementById('imagePreviewModal');
+    if (modal) modal.classList.remove('active');
 });
 
-document.getElementById('imagePreviewModal').addEventListener('click', (e) => {
-    if (e.target.id === 'imagePreviewModal') {
+safeOn('imagePreviewModal', 'click', (e) => {
+    if (e.target && e.target.id === 'imagePreviewModal') {
         e.target.classList.remove('active');
     }
 });
 
 // -------------------- IMAGE COMPRESSION + UPLOAD --------------------
-function fileToDataUrl(file) {
-    return new Promise((resolve) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = () => resolve(null);
-        reader.readAsDataURL(file);
-    });
-}
-
 // Downscale + JPEG-compress so that even big photos land around a few
 // hundred KB of base64 in the DB. This keeps polling light.
 function compressImage(file, maxDim = 800, quality = 0.72) {
@@ -1417,7 +1475,7 @@ async function sendImageMessage(dataUrl, sender) {
             created_at: new Date().toISOString(),
             _optimistic: true
         }, 'user');
-        supportMessages.scrollTop = supportMessages.scrollHeight;
+        if (supportMessages) supportMessages.scrollTop = supportMessages.scrollHeight;
 
         try {
             await fetch(`${BACKEND_URL}/api/support/send`, {
@@ -1432,12 +1490,12 @@ async function sendImageMessage(dataUrl, sender) {
                     photo_url: getMyAvatarUrl()
                 })
             });
-            const opt = supportMessages.querySelector(`[data-msg-id="${optimisticId}"]`);
+            const opt = supportMessages?.querySelector(`[data-msg-id="${optimisticId}"]`);
             if (opt) opt.remove();
             await loadSupportMessages();
             showToast('📷 Image sent', 'success', 1500);
         } catch (err) {
-            const opt = supportMessages.querySelector(`[data-msg-id="${optimisticId}"]`);
+            const opt = supportMessages?.querySelector(`[data-msg-id="${optimisticId}"]`);
             if (opt) opt.remove();
             showToast('Failed to send image.', 'error');
         }
@@ -1451,7 +1509,7 @@ async function sendImageMessage(dataUrl, sender) {
             created_at: new Date().toISOString(),
             _optimistic: true
         }, 'admin');
-        adminChatMessages.scrollTop = adminChatMessages.scrollHeight;
+        if (adminChatMessages) adminChatMessages.scrollTop = adminChatMessages.scrollHeight;
 
         try {
             await fetch(`${BACKEND_URL}/api/support/send`, {
@@ -1464,12 +1522,12 @@ async function sendImageMessage(dataUrl, sender) {
                     admin_id: state.user.id
                 })
             });
-            const opt = adminChatMessages.querySelector(`[data-msg-id="${optimisticId}"]`);
+            const opt = adminChatMessages?.querySelector(`[data-msg-id="${optimisticId}"]`);
             if (opt) opt.remove();
             await loadAdminChatMessages(state.activeSupportUser);
             showToast('📷 Image sent', 'success', 1500);
         } catch (err) {
-            const opt = adminChatMessages.querySelector(`[data-msg-id="${optimisticId}"]`);
+            const opt = adminChatMessages?.querySelector(`[data-msg-id="${optimisticId}"]`);
             if (opt) opt.remove();
             showToast('Failed to send image.', 'error');
         }
@@ -1480,8 +1538,9 @@ setupImageUpload('supportClipBtn', 'supportImageInput', 'user');
 setupImageUpload('adminClipBtn', 'adminImageInput', 'admin');
 
 // -------------------- USER-SIDE UNREAD BADGE POLLING --------------------
-let userUnreadPolling = null;
-
+// NOTE: the poller handle lives on `state` (not a module-level `let`) so that
+// calling startUserUnreadPolling() during early init cannot hit a Temporal
+// Dead Zone ReferenceError, which is what crashed the Telegram mini-app.
 function updateSupportBadge(count) {
     const badge = document.getElementById('supportBadge');
     if (!badge) return;
@@ -1515,10 +1574,10 @@ async function pollUserUnread() {
 }
 
 function startUserUnreadPolling() {
-    if (userUnreadPolling) clearInterval(userUnreadPolling);
+    if (state.userUnreadPolling) clearInterval(state.userUnreadPolling);
     // small delay so we don't race checkAdminStatus
     setTimeout(pollUserUnread, 1500);
-    userUnreadPolling = setInterval(pollUserUnread, 20000);
+    state.userUnreadPolling = setInterval(pollUserUnread, 20000);
 }
 
 // -------------------- ADMIN CHECK --------------------
@@ -1539,18 +1598,19 @@ function openSupport() {
         showToast('Please open the app inside Telegram to use support.', 'error');
         return;
     }
+    if (!supportOverlay) return;
     supportOverlay.classList.add('active');
 
     if (state.isAdmin) {
-        supportListView.style.display = 'flex';
-        supportChatView.style.display = 'none';
-        adminChatView.style.display = 'none';
+        if (supportListView) supportListView.style.display = 'flex';
+        if (supportChatView) supportChatView.style.display = 'none';
+        if (adminChatView) adminChatView.style.display = 'none';
         loadSupportConversations();
         startAdminListPolling();
     } else {
-        supportListView.style.display = 'none';
-        adminChatView.style.display = 'none';
-        supportChatView.style.display = 'flex';
+        if (supportListView) supportListView.style.display = 'none';
+        if (adminChatView) adminChatView.style.display = 'none';
+        if (supportChatView) supportChatView.style.display = 'flex';
         // Clear the badge immediately — we're about to mark them read
         updateSupportBadge(0);
         loadSupportMessages();
@@ -1559,7 +1619,7 @@ function openSupport() {
 }
 
 function closeSupport() {
-    supportOverlay.classList.remove('active');
+    if (supportOverlay) supportOverlay.classList.remove('active');
     stopAllSupportPolling();
     state.activeSupportUser = null;
     state.activeSupportUserInfo = null;
@@ -1575,7 +1635,8 @@ function stopAllSupportPolling() {
 function startSupportPolling() {
     if (state.supportPolling) clearInterval(state.supportPolling);
     state.supportPolling = setInterval(() => {
-        if (supportOverlay.classList.contains('active') && supportChatView.style.display !== 'none') {
+        if (supportOverlay && supportOverlay.classList.contains('active') &&
+            supportChatView && supportChatView.style.display !== 'none') {
             loadSupportMessages(true);
         }
     }, 5000);
@@ -1584,7 +1645,8 @@ function startSupportPolling() {
 function startAdminListPolling() {
     if (state.adminListPolling) clearInterval(state.adminListPolling);
     state.adminListPolling = setInterval(() => {
-        if (supportOverlay.classList.contains('active') && supportListView.style.display !== 'none') {
+        if (supportOverlay && supportOverlay.classList.contains('active') &&
+            supportListView && supportListView.style.display !== 'none') {
             loadSupportConversations();
         }
     }, 8000);
@@ -1593,7 +1655,9 @@ function startAdminListPolling() {
 function startAdminChatPolling() {
     if (state.adminChatPolling) clearInterval(state.adminChatPolling);
     state.adminChatPolling = setInterval(() => {
-        if (supportOverlay.classList.contains('active') && adminChatView.style.display !== 'none' && state.activeSupportUser) {
+        if (supportOverlay && supportOverlay.classList.contains('active') &&
+            adminChatView && adminChatView.style.display !== 'none' &&
+            state.activeSupportUser) {
             loadAdminChatMessages(state.activeSupportUser, true);
         }
     }, 5000);
@@ -1601,7 +1665,7 @@ function startAdminChatPolling() {
 
 // -------------------- USER SIDE --------------------
 async function loadSupportMessages(silent = false) {
-    if (!state.user || !state.user.id) return;
+    if (!state.user || !state.user.id || !supportMessages) return;
     try {
         let url = `${BACKEND_URL}/api/support/messages?telegram_id=${state.user.id}`;
         if (chatCursor.user > 0) url += `&since_id=${chatCursor.user}`;
@@ -1646,9 +1710,9 @@ async function loadSupportMessages(silent = false) {
 }
 
 async function sendSupportMessage() {
-    const text = (supportInput.value || '').trim();
+    const text = (supportInput?.value || '').trim();
     if (!text || !state.user) return;
-    supportInput.value = '';
+    if (supportInput) supportInput.value = '';
 
     // Optimistic render
     const optimisticId = 'opt-' + Date.now();
@@ -1659,7 +1723,7 @@ async function sendSupportMessage() {
         created_at: new Date().toISOString(),
         _optimistic: true
     }, 'user');
-    supportMessages.scrollTop = supportMessages.scrollHeight;
+    if (supportMessages) supportMessages.scrollTop = supportMessages.scrollHeight;
 
     try {
         await fetch(`${BACKEND_URL}/api/support/send`, {
@@ -1676,24 +1740,26 @@ async function sendSupportMessage() {
                 photo_url: getMyAvatarUrl()
             })
         });
-        const opt = supportMessages.querySelector(`[data-msg-id="${optimisticId}"]`);
+        const opt = supportMessages?.querySelector(`[data-msg-id="${optimisticId}"]`);
         if (opt) opt.remove();
         await loadSupportMessages();
     } catch (e) {
-        const opt = supportMessages.querySelector(`[data-msg-id="${optimisticId}"]`);
+        const opt = supportMessages?.querySelector(`[data-msg-id="${optimisticId}"]`);
         if (opt) opt.remove();
         showToast('Failed to send message.', 'error');
     }
 }
 
-supportSendBtn.addEventListener('click', sendSupportMessage);
-supportInput.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') {
-        e.preventDefault();
-        sendSupportMessage();
-    }
-});
-closeSupportChat.addEventListener('click', closeSupport);
+if (supportSendBtn) supportSendBtn.addEventListener('click', sendSupportMessage);
+if (supportInput) {
+    supportInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            sendSupportMessage();
+        }
+    });
+}
+if (closeSupportChat) closeSupportChat.addEventListener('click', closeSupport);
 
 // -------------------- ADMIN SIDE --------------------
 async function loadSupportConversations() {
@@ -1759,16 +1825,16 @@ async function openAdminChat(telegramId, convo) {
     state.activeSupportUser = telegramId;
     state.activeSupportUserInfo = convo || null;
 
-    supportListView.style.display = 'none';
-    adminChatView.style.display = 'flex';
-    adminChatName.textContent = convo?.first_name || 'User';
+    if (supportListView) supportListView.style.display = 'none';
+    if (adminChatView) adminChatView.style.display = 'flex';
+    if (adminChatName) adminChatName.textContent = convo?.first_name || 'User';
 
     // Same fallback: initials if no photo
     const avatarSrc = convo?.photo_url || buildInitialsAvatar(convo?.first_name || 'User');
-    adminChatAvatar.src = avatarSrc;
+    if (adminChatAvatar) adminChatAvatar.src = avatarSrc;
 
     // Full reload for this user: reset container and cursor
-    adminChatMessages.innerHTML = '';
+    if (adminChatMessages) adminChatMessages.innerHTML = '';
     chatCursor.admin[telegramId] = 0;
 
     await loadAdminChatMessages(telegramId);
@@ -1782,6 +1848,7 @@ async function openAdminChat(telegramId, convo) {
 }
 
 async function loadAdminChatMessages(telegramId, silent = false) {
+    if (!adminChatMessages) return;
     try {
         const cursor = chatCursor.admin[telegramId] || 0;
         let url = `${BACKEND_URL}/api/support/messages?telegram_id=${telegramId}`;
@@ -1811,9 +1878,9 @@ async function loadAdminChatMessages(telegramId, silent = false) {
 }
 
 async function sendAdminReply() {
-    const text = (adminChatInput.value || '').trim();
+    const text = (adminChatInput?.value || '').trim();
     if (!text || !state.activeSupportUser || !state.user) return;
-    adminChatInput.value = '';
+    if (adminChatInput) adminChatInput.value = '';
 
     const optimisticId = 'opt-' + Date.now();
     appendSupportBubble(adminChatMessages, {
@@ -1823,7 +1890,7 @@ async function sendAdminReply() {
         created_at: new Date().toISOString(),
         _optimistic: true
     }, 'admin');
-    adminChatMessages.scrollTop = adminChatMessages.scrollHeight;
+    if (adminChatMessages) adminChatMessages.scrollTop = adminChatMessages.scrollHeight;
 
     try {
         await fetch(`${BACKEND_URL}/api/support/send`, {
@@ -1836,36 +1903,40 @@ async function sendAdminReply() {
                 admin_id: state.user.id
             })
         });
-        const opt = adminChatMessages.querySelector(`[data-msg-id="${optimisticId}"]`);
+        const opt = adminChatMessages?.querySelector(`[data-msg-id="${optimisticId}"]`);
         if (opt) opt.remove();
         await loadAdminChatMessages(state.activeSupportUser);
     } catch (e) {
-        const opt = adminChatMessages.querySelector(`[data-msg-id="${optimisticId}"]`);
+        const opt = adminChatMessages?.querySelector(`[data-msg-id="${optimisticId}"]`);
         if (opt) opt.remove();
         showToast('Failed to send reply.', 'error');
     }
 }
 
-adminChatSendBtn.addEventListener('click', sendAdminReply);
-adminChatInput.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') {
-        e.preventDefault();
-        sendAdminReply();
-    }
-});
-closeSupportList.addEventListener('click', closeSupport);
+if (adminChatSendBtn) adminChatSendBtn.addEventListener('click', sendAdminReply);
+if (adminChatInput) {
+    adminChatInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            sendAdminReply();
+        }
+    });
+}
+if (closeSupportList) closeSupportList.addEventListener('click', closeSupport);
 
-backToSupportList.addEventListener('click', () => {
-    if (state.adminChatPolling) { clearInterval(state.adminChatPolling); state.adminChatPolling = null; }
-    state.activeSupportUser = null;
-    state.activeSupportUserInfo = null;
-    adminChatView.style.display = 'none';
-    supportListView.style.display = 'flex';
-    // Force list refresh since state may have changed
-    lastRendered.conversations = '';
-    loadSupportConversations();
-    startAdminListPolling();
-});
+if (backToSupportList) {
+    backToSupportList.addEventListener('click', () => {
+        if (state.adminChatPolling) { clearInterval(state.adminChatPolling); state.adminChatPolling = null; }
+        state.activeSupportUser = null;
+        state.activeSupportUserInfo = null;
+        if (adminChatView) adminChatView.style.display = 'none';
+        if (supportListView) supportListView.style.display = 'flex';
+        // Force list refresh since state may have changed
+        lastRendered.conversations = '';
+        loadSupportConversations();
+        startAdminListPolling();
+    });
+}
 
 // =============================================================================
 //  INITIAL LOAD
