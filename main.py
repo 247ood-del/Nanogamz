@@ -247,7 +247,7 @@ async def support_send(request: Request):
             if not last_msgs.data or not last_msgs.data[0].get("is_auto_reply"):
                 should_auto_reply = True
 
-        # Insert the user/admin message
+        # Insert the user/admin message (preserve whatever info was passed)
         supabase.table("support_messages").insert({
             "telegram_id": telegram_id,
             "sender": sender,
@@ -260,12 +260,18 @@ async def support_send(request: Request):
             "is_auto_reply": False
         }).execute()
 
-        # Send the auto-reply if this is a fresh user batch
+        # Send the auto-reply if this is a fresh user batch.
+        # IMPORTANT: also store the user's info on the auto-reply row so that
+        # the conversation always has a name & photo even when the auto-reply
+        # happens to be the latest message.
         if should_auto_reply:
             supabase.table("support_messages").insert({
                 "telegram_id": telegram_id,
                 "sender": "admin",
                 "message": SUPPORT_AUTO_REPLY,
+                "first_name": first_name,
+                "username": username,
+                "photo_url": photo_url,
                 "read_by_admin": True,
                 "read_by_user": False,
                 "is_auto_reply": True
@@ -307,22 +313,37 @@ async def support_conversations(admin_id: int):
             .order("created_at", desc=True)
             .execute()
         )
+
         convos = {}
         for m in (msgs.data or []):
             tid = m["telegram_id"]
             if tid not in convos:
                 convos[tid] = {
                     "telegram_id": tid,
-                    "first_name": m.get("first_name") or "User",
-                    "username": m.get("username") or "",
-                    "photo_url": m.get("photo_url") or "",
+                    "first_name": "",
+                    "username": "",
+                    "photo_url": "",
                     "last_message": m.get("message", ""),
                     "last_message_at": m.get("created_at"),
                     "last_sender": m.get("sender"),
                     "unread_count": 0
                 }
+            # Backfill user info from ANY message that carries it
+            # (so auto-reply rows don't hide the user's name/photo)
+            if not convos[tid]["first_name"] and m.get("first_name"):
+                convos[tid]["first_name"] = m["first_name"]
+            if not convos[tid]["photo_url"] and m.get("photo_url"):
+                convos[tid]["photo_url"] = m["photo_url"]
+            if not convos[tid]["username"] and m.get("username"):
+                convos[tid]["username"] = m["username"]
+
             if m.get("sender") == "user" and not m.get("read_by_admin"):
                 convos[tid]["unread_count"] += 1
+
+        # Final fallback name
+        for c in convos.values():
+            if not c["first_name"]:
+                c["first_name"] = "User"
 
         convos_list = sorted(
             convos.values(),
