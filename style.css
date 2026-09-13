@@ -1024,3 +1024,261 @@ body.search-open .game-grid {
     padding: 0 6px;
     flex-shrink: 0;
 }
+
+/* ========================================================================== */
+/*  SUPPORT CHAT – ENHANCEMENTS                                               */
+/*  (unread badge, clip button, per-message copy, clickable links/numbers,    */
+/*   image bubbles, link-options modal, image preview)                        */
+/* ========================================================================== */
+
+/* --- Unread badge on the "💬 Support" menu link --- */
+.menu-link {
+    position: relative;
+}
+.menu-badge {
+    display: none;
+    background: #ff3b30;
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
+    border-radius: 10px;
+    line-height: 20px;
+    text-align: center;
+    margin-left: 8px;
+    vertical-align: middle;
+}
+.menu-badge.show {
+    display: inline-block;
+}
+
+/* --- Clip button (📎) inside support input bar --- */
+.support-input-bar .clip-btn {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text);
+    font-size: 18px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.support-input-bar .clip-btn:hover {
+    background: rgba(255, 255, 255, 0.14);
+}
+
+/* --- Message rows: bubble + copy button --- */
+.support-msg-row {
+    display: flex;
+    align-items: flex-end;
+    gap: 6px;
+    max-width: 88%;
+    animation: supportBubbleIn 0.15s ease-out;
+}
+.support-msg-row.mine {
+    align-self: flex-end;
+    justify-content: flex-end;
+}
+.support-msg-row.theirs {
+    align-self: flex-start;
+    justify-content: flex-start;
+    flex-direction: row-reverse;
+}
+.support-msg-row .support-bubble {
+    /* Reset max-width / align-self — the row controls layout now */
+    max-width: 100%;
+    align-self: auto;
+    animation: none;
+}
+.support-msg-row .support-bubble.mine,
+.support-msg-row .support-bubble.theirs {
+    align-self: auto;
+}
+.support-msg-row.optimistic {
+    opacity: 0.75;
+}
+
+/* --- Copy button next to each message --- */
+.msg-copy-btn {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: var(--text);
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    font-size: 11px;
+    cursor: pointer;
+    opacity: 0.55;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    transition: opacity 0.15s, background 0.15s, transform 0.1s;
+    margin-bottom: 2px;
+}
+.msg-copy-btn:hover {
+    opacity: 1;
+    background: rgba(255, 255, 255, 0.14);
+}
+.msg-copy-btn:active {
+    transform: scale(0.9);
+}
+
+/* --- Clickable links inside messages --- */
+.msg-link {
+    color: #6cb2ff;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    cursor: pointer;
+    word-break: break-all;
+}
+.support-bubble.mine .msg-link {
+    color: #cfe4ff;
+}
+
+/* --- Clickable number sequences (phone, IDs, etc.) --- */
+.msg-num {
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    cursor: pointer;
+    word-break: break-all;
+}
+
+/* --- Image bubble --- */
+.support-bubble.image-only {
+    padding: 4px;
+    background: transparent;
+    max-width: 78%;
+}
+.support-bubble.image-only .support-time {
+    padding: 0 4px 2px;
+}
+.support-image {
+    display: block;
+    max-width: 100%;
+    max-height: 260px;
+    border-radius: 12px;
+    cursor: zoom-in;
+    background: #2a2a2a;
+    object-fit: cover;
+}
+
+/* --- Link options modal --- */
+.link-options-modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.65);
+    z-index: 100001;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+}
+.link-options-modal.active {
+    display: flex;
+}
+.link-options-content {
+    background: var(--bar);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 16px;
+    padding: 18px;
+    max-width: 340px;
+    width: 100%;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.link-options-title {
+    font-size: 14px;
+    font-weight: 700;
+    opacity: 0.75;
+    text-align: center;
+    letter-spacing: 0.5px;
+}
+.link-options-url {
+    font-size: 13px;
+    word-break: break-all;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+    padding: 10px 12px;
+    max-height: 100px;
+    overflow-y: auto;
+    color: var(--text);
+    opacity: 0.9;
+}
+.link-options-buttons {
+    display: flex;
+    gap: 8px;
+}
+.link-opt-btn {
+    flex: 1;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: 12px 0;
+    border-radius: 10px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    transition: transform 0.1s, filter 0.15s;
+}
+.link-opt-btn:hover {
+    filter: brightness(1.1);
+}
+.link-opt-btn:active {
+    transform: scale(0.97);
+}
+.link-options-cancel {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text);
+    border: none;
+    padding: 10px 0;
+    border-radius: 10px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    font-family: inherit;
+}
+
+/* --- Image preview modal --- */
+.image-preview-modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.92);
+    z-index: 100002;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+.image-preview-modal.active {
+    display: flex;
+}
+.image-preview-modal img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    border-radius: 8px;
+}
+.image-preview-close {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    background: rgba(255, 255, 255, 0.12);
+    border: none;
+    color: #fff;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    font-size: 20px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
