@@ -163,6 +163,7 @@ if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
 
     fetchUserSavedGameIds();
     checkAdminStatus();
+    startUserUnreadPolling();
 }
 
 // ------------------------ DOM REFS ------------------------
@@ -1093,15 +1094,434 @@ savedGridContainer.addEventListener('scroll', () => {
 //  SUPPORT CHAT  (USER VIEW + ADMIN VIEW)
 // =============================================================================
 
-// Cache last-rendered payload so polling only re-renders when data actually
-// changes. This is what stops the "blinking" that comes from blowing away
-// innerHTML every few seconds.
 const lastRendered = {
-    conversations: '',
-    userChat: '',
-    adminChat: ''
+    conversations: ''
 };
 
+// Cursor map so we only download NEW messages on each poll (avoids re-fetching
+// large image payloads every 5 seconds). The list view still uses the cached
+// payload check to prevent blinking.
+const chatCursor = {
+    user: 0,
+    admin: {}  // telegram_id -> last seen message id
+};
+
+function isScrolledToBottom(el) {
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+}
+
+// -------------------- MESSAGE RENDERING HELPERS --------------------
+
+// Turn plain text into safe HTML where URLs and long numbers become
+// interactive, underlined elements. Newlines become <br>.
+function linkifyMessage(text) {
+    if (!text) return '';
+
+    const tokens = [];
+    // Match either a URL or a long enough number sequence (TG id, phone, etc.)
+    const regex = /(https?:\/\/[^\s<>"']+)|(\+?\d[\d\s\-()]{4,}\d)/g;
+    let lastIndex = 0;
+    let match;
+
+    while ((match = regex.exec(text)) !== null) {
+        if (match.index > lastIndex) {
+            tokens.push({ type: 'text', value: text.slice(lastIndex, match.index) });
+        }
+        if (match[1]) {
+            // Trim trailing punctuation so "(https://x.com)." doesn't include ")." 
+            let url = match[1];
+            let trailing = '';
+            const t = url.match(/[.,;:!?)\]]+$/);
+            if (t) {
+                trailing = t[0];
+                url = url.slice(0, -trailing.length);
+            }
+            tokens.push({ type: 'link', value: url });
+            if (trailing) tokens.push({ type: 'text', value: trailing });
+        } else if (match[2]) {
+            tokens.push({ type: 'number', value: match[2].trim() });
+        }
+        lastIndex = regex.lastIndex;
+    }
+    if (lastIndex < text.length) {
+        tokens.push({ type: 'text', value: text.slice(lastIndex) });
+    }
+
+    return tokens.map(t => {
+        if (t.type === 'link') {
+            const safe = escapeHtml(t.value);
+            return `<a class="msg-link" data-url="${safe}" href="#" rel="noopener">${safe}</a>`;
+        }
+        if (t.type === 'number') {
+            const safe = escapeHtml(t.value);
+            return `<span class="msg-num" data-num="${safe}">${safe}</span>`;
+        }
+        return escapeHtml(t.value).replace(/\n/g, '<br>');
+    }).join('');
+}
+
+// Robust clipboard copy with fallback for older webviews.
+async function copyToClipboard(text) {
+    try {
+        await navigator.clipboard.writeText(text);
+        return true;
+    } catch {
+        try {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            ta.style.left = '-9999px';
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+            return true;
+        } catch {
+            return false;
+        }
+    }
+}
+
+// Append a single bubble (text or image) with its copy button.
+// `role` is 'user' or 'admin' — it determines which sender means "mine".
+function appendSupportBubble(container, msg, role) {
+    const isMine = role === 'user' ? msg.sender === 'user' : msg.sender === 'admin';
+
+    const row = document.createElement('div');
+    row.className = `support-msg-row ${isMine ? 'mine' : 'theirs'}`;
+    if (msg.id !== undefined) row.dataset.msgId = String(msg.id);
+    if (msg._optimistic) row.classList.add('optimistic');
+
+    const bubble = document.createElement('div');
+    bubble.className = `support-bubble ${isMine ? 'mine' : 'theirs'}`;
+
+    const rawMessage = msg.message || '';
+    const isImage = rawMessage.startsWith('__IMG__');
+
+    if (isImage) {
+        bubble.classList.add('image-only');
+        const dataUrl = rawMessage.substring(7);
+        const img = document.createElement('img');
+        img.className = 'support-image';
+        img.src = dataUrl;
+        img.alt = 'image';
+        img.loading = 'lazy';
+        img.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openImagePreview(dataUrl);
+        });
+        bubble.appendChild(img);
+    } else {
+        const textEl = document.createElement('div');
+        textEl.className = 'support-text';
+        textEl.innerHTML = linkifyMessage(rawMessage);
+        bubble.appendChild(textEl);
+    }
+
+    const timeEl = document.createElement('span');
+    timeEl.className = 'support-time';
+    timeEl.textContent = msg._optimistic ? 'sending…' : formatTime(msg.created_at);
+    bubble.appendChild(timeEl);
+
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'msg-copy-btn';
+    copyBtn.title = 'Copy message';
+    copyBtn.type = 'button';
+    copyBtn.textContent = '📋';
+    if (isImage) {
+        copyBtn.style.visibility = 'hidden';
+    }
+    copyBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (isImage) return;
+        const ok = await copyToClipboard(rawMessage);
+        showToast(ok ? '📋 Message copied' : 'Failed to copy', ok ? 'success' : 'error', 1500);
+    });
+
+    row.appendChild(bubble);
+    row.appendChild(copyBtn);
+    container.appendChild(row);
+
+    // Interactive links & numbers (event handlers are attached per node
+    // so no event delegation is needed on the container).
+    if (!isImage) {
+        bubble.querySelectorAll('.msg-link').forEach(el => {
+            el.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                showLinkOptions(el.dataset.url);
+            });
+        });
+        bubble.querySelectorAll('.msg-num').forEach(el => {
+            el.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const ok = await copyToClipboard(el.dataset.num);
+                showToast(ok ? '📋 Copied' : 'Failed to copy', ok ? 'success' : 'error', 1500);
+            });
+        });
+    }
+}
+
+// -------------------- LINK OPTIONS MODAL --------------------
+let activeLinkUrl = '';
+
+function showLinkOptions(url) {
+    activeLinkUrl = url;
+    document.getElementById('linkOptionsUrl').textContent = url;
+    document.getElementById('linkOptionsModal').classList.add('active');
+}
+
+document.getElementById('linkOptionCopy').addEventListener('click', async () => {
+    const ok = await copyToClipboard(activeLinkUrl);
+    document.getElementById('linkOptionsModal').classList.remove('active');
+    showToast(ok ? '📋 Link copied' : 'Failed to copy', ok ? 'success' : 'error', 1500);
+});
+
+document.getElementById('linkOptionOpen').addEventListener('click', () => {
+    const url = activeLinkUrl;
+    document.getElementById('linkOptionsModal').classList.remove('active');
+    try {
+        if (window.Telegram?.WebApp?.openLink) {
+            Telegram.WebApp.openLink(url);
+        } else {
+            window.open(url, '_blank', 'noopener');
+        }
+    } catch {
+        window.open(url, '_blank', 'noopener');
+    }
+});
+
+document.getElementById('linkOptionCancel').addEventListener('click', () => {
+    document.getElementById('linkOptionsModal').classList.remove('active');
+});
+
+document.getElementById('linkOptionsModal').addEventListener('click', (e) => {
+    if (e.target.id === 'linkOptionsModal') {
+        e.target.classList.remove('active');
+    }
+});
+
+// -------------------- IMAGE PREVIEW MODAL --------------------
+function openImagePreview(src) {
+    document.getElementById('imagePreviewImg').src = src;
+    document.getElementById('imagePreviewModal').classList.add('active');
+}
+
+document.getElementById('imagePreviewClose').addEventListener('click', () => {
+    document.getElementById('imagePreviewModal').classList.remove('active');
+});
+
+document.getElementById('imagePreviewModal').addEventListener('click', (e) => {
+    if (e.target.id === 'imagePreviewModal') {
+        e.target.classList.remove('active');
+    }
+});
+
+// -------------------- IMAGE COMPRESSION + UPLOAD --------------------
+function fileToDataUrl(file) {
+    return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => resolve(null);
+        reader.readAsDataURL(file);
+    });
+}
+
+// Downscale + JPEG-compress so that even big photos land around a few
+// hundred KB of base64 in the DB. This keeps polling light.
+function compressImage(file, maxDim = 800, quality = 0.72) {
+    return new Promise((resolve) => {
+        const img = new Image();
+        const url = URL.createObjectURL(file);
+        img.onload = () => {
+            URL.revokeObjectURL(url);
+            let { width, height } = img;
+            if (width > maxDim || height > maxDim) {
+                if (width > height) {
+                    height = Math.round((height * maxDim) / width);
+                    width = maxDim;
+                } else {
+                    width = Math.round((width * maxDim) / height);
+                    height = maxDim;
+                }
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, width, height);
+            try {
+                resolve(canvas.toDataURL('image/jpeg', quality));
+            } catch {
+                resolve(null);
+            }
+        };
+        img.onerror = () => {
+            URL.revokeObjectURL(url);
+            resolve(null);
+        };
+        img.src = url;
+    });
+}
+
+function setupImageUpload(clipBtnId, inputId, senderType) {
+    const btn = document.getElementById(clipBtnId);
+    const input = document.getElementById(inputId);
+    if (!btn || !input) return;
+
+    btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        input.click();
+    });
+
+    input.addEventListener('change', async (e) => {
+        const file = e.target.files && e.target.files[0];
+        input.value = ''; // allow re-selecting the same file
+        if (!file) return;
+
+        if (!file.type.startsWith('image/')) {
+            showToast('Only image files are allowed.', 'error');
+            return;
+        }
+        if (file.size > 3 * 1024 * 1024) {
+            showToast('Image must be under 3MB.', 'error');
+            return;
+        }
+
+        const dataUrl = await compressImage(file);
+        if (!dataUrl) {
+            showToast('Failed to process image.', 'error');
+            return;
+        }
+
+        await sendImageMessage(dataUrl, senderType);
+    });
+}
+
+async function sendImageMessage(dataUrl, sender) {
+    if (!state.user) return;
+
+    const message = `__IMG__${dataUrl}`;
+
+    if (sender === 'user') {
+        if (!state.user.id) {
+            showToast('Please open in Telegram to send images.', 'error');
+            return;
+        }
+        const optimisticId = 'opt-' + Date.now();
+        appendSupportBubble(supportMessages, {
+            id: optimisticId,
+            message,
+            sender: 'user',
+            created_at: new Date().toISOString(),
+            _optimistic: true
+        }, 'user');
+        supportMessages.scrollTop = supportMessages.scrollHeight;
+
+        try {
+            await fetch(`${BACKEND_URL}/api/support/send`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    telegram_id: state.user.id,
+                    message,
+                    sender: 'user',
+                    first_name: state.user.first_name || '',
+                    username: state.user.username || '',
+                    photo_url: getMyAvatarUrl()
+                })
+            });
+            const opt = supportMessages.querySelector(`[data-msg-id="${optimisticId}"]`);
+            if (opt) opt.remove();
+            await loadSupportMessages();
+            showToast('📷 Image sent', 'success', 1500);
+        } catch (err) {
+            const opt = supportMessages.querySelector(`[data-msg-id="${optimisticId}"]`);
+            if (opt) opt.remove();
+            showToast('Failed to send image.', 'error');
+        }
+    } else {
+        if (!state.activeSupportUser) return;
+        const optimisticId = 'opt-' + Date.now();
+        appendSupportBubble(adminChatMessages, {
+            id: optimisticId,
+            message,
+            sender: 'admin',
+            created_at: new Date().toISOString(),
+            _optimistic: true
+        }, 'admin');
+        adminChatMessages.scrollTop = adminChatMessages.scrollHeight;
+
+        try {
+            await fetch(`${BACKEND_URL}/api/support/send`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    telegram_id: state.activeSupportUser,
+                    message,
+                    sender: 'admin',
+                    admin_id: state.user.id
+                })
+            });
+            const opt = adminChatMessages.querySelector(`[data-msg-id="${optimisticId}"]`);
+            if (opt) opt.remove();
+            await loadAdminChatMessages(state.activeSupportUser);
+            showToast('📷 Image sent', 'success', 1500);
+        } catch (err) {
+            const opt = adminChatMessages.querySelector(`[data-msg-id="${optimisticId}"]`);
+            if (opt) opt.remove();
+            showToast('Failed to send image.', 'error');
+        }
+    }
+}
+
+setupImageUpload('supportClipBtn', 'supportImageInput', 'user');
+setupImageUpload('adminClipBtn', 'adminImageInput', 'admin');
+
+// -------------------- USER-SIDE UNREAD BADGE POLLING --------------------
+let userUnreadPolling = null;
+
+function updateSupportBadge(count) {
+    const badge = document.getElementById('supportBadge');
+    if (!badge) return;
+    if (count > 0) {
+        badge.textContent = count > 99 ? '99+' : String(count);
+        badge.classList.add('show');
+    } else {
+        badge.classList.remove('show');
+    }
+}
+
+async function pollUserUnread() {
+    if (!state.user || !state.user.id || state.isAdmin) return;
+    try {
+        const resp = await fetch(`${BACKEND_URL}/api/support/unread-count?telegram_id=${state.user.id}`);
+        if (resp.ok) {
+            const data = await resp.json();
+            updateSupportBadge(data.count || 0);
+            return;
+        }
+    } catch {
+        // fall through to the fallback
+    }
+    // Fallback for deployments where the unread-count endpoint isn't available.
+    try {
+        const resp = await fetch(`${BACKEND_URL}/api/support/messages?telegram_id=${state.user.id}`);
+        const data = await resp.json();
+        const unread = (data.messages || []).filter(m => m.sender === 'admin' && !m.read_by_user).length;
+        updateSupportBadge(unread);
+    } catch {}
+}
+
+function startUserUnreadPolling() {
+    if (userUnreadPolling) clearInterval(userUnreadPolling);
+    // small delay so we don't race checkAdminStatus
+    setTimeout(pollUserUnread, 1500);
+    userUnreadPolling = setInterval(pollUserUnread, 20000);
+}
+
+// -------------------- ADMIN CHECK --------------------
 async function checkAdminStatus() {
     if (!state.user || !state.user.id) return;
     try {
@@ -1113,6 +1533,7 @@ async function checkAdminStatus() {
     }
 }
 
+// -------------------- OPEN / CLOSE SUPPORT OVERLAY --------------------
 function openSupport() {
     if (!state.user || !state.user.id) {
         showToast('Please open the app inside Telegram to use support.', 'error');
@@ -1130,6 +1551,8 @@ function openSupport() {
         supportListView.style.display = 'none';
         adminChatView.style.display = 'none';
         supportChatView.style.display = 'flex';
+        // Clear the badge immediately — we're about to mark them read
+        updateSupportBadge(0);
         loadSupportMessages();
         startSupportPolling();
     }
@@ -1141,8 +1564,6 @@ function closeSupport() {
     state.activeSupportUser = null;
     state.activeSupportUserInfo = null;
     lastRendered.conversations = '';
-    lastRendered.userChat = '';
-    lastRendered.adminChat = '';
 }
 
 function stopAllSupportPolling() {
@@ -1182,45 +1603,46 @@ function startAdminChatPolling() {
 async function loadSupportMessages(silent = false) {
     if (!state.user || !state.user.id) return;
     try {
-        const resp = await fetch(`${BACKEND_URL}/api/support/messages?telegram_id=${state.user.id}`);
+        let url = `${BACKEND_URL}/api/support/messages?telegram_id=${state.user.id}`;
+        if (chatCursor.user > 0) url += `&since_id=${chatCursor.user}`;
+        const resp = await fetch(url);
         const data = await resp.json();
-        renderSupportMessages(data.messages || []);
-        // Mark admin messages as read by user
+        const msgs = data.messages || [];
+
+        if (msgs.length > 0) {
+            // Remove "empty state" placeholder if it exists
+            const empty = supportMessages.querySelector('.support-empty');
+            if (empty) empty.remove();
+
+            const wasAtBottom = isScrolledToBottom(supportMessages);
+            msgs.forEach(m => {
+                if (m.id > chatCursor.user) chatCursor.user = m.id;
+                appendSupportBubble(supportMessages, m, 'user');
+            });
+            if (wasAtBottom || chatCursor.user === 0) {
+                supportMessages.scrollTop = supportMessages.scrollHeight;
+            }
+        } else if (chatCursor.user === 0) {
+            // Very first load, no messages at all
+            supportMessages.innerHTML = `
+                <div class="support-empty">
+                    <div style="font-size:40px;">💬</div>
+                    <div>Start a conversation with our support team.</div>
+                    <div style="opacity:0.6; font-size:13px;">We usually reply within 24 hours.</div>
+                </div>`;
+        }
+
+        // Mark admin messages as read for the user
         await fetch(`${BACKEND_URL}/api/support/mark-read`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ telegram_id: state.user.id, viewer: 'user' })
         });
+        // Refresh the badge to 0
+        updateSupportBadge(0);
     } catch (e) {
         if (!silent) console.error('Load support messages error:', e);
     }
-}
-
-function renderSupportMessages(msgs) {
-    if (!supportMessages) return;
-
-    // Skip re-render if nothing changed (prevents flicker)
-    const payload = JSON.stringify(msgs.map(m => [m.id, m.message, m.created_at, m.sender]));
-    if (payload === lastRendered.userChat) return;
-    lastRendered.userChat = payload;
-
-    if (!msgs.length) {
-        supportMessages.innerHTML = `
-            <div class="support-empty">
-                <div style="font-size:40px;">💬</div>
-                <div>Start a conversation with our support team.</div>
-                <div style="opacity:0.6; font-size:13px;">We usually reply within 24 hours.</div>
-            </div>`;
-        return;
-    }
-    supportMessages.innerHTML = msgs.map(m => {
-        const isMine = m.sender === 'user';
-        return `<div class="support-bubble ${isMine ? 'mine' : 'theirs'}">
-            <div class="support-text">${escapeHtml(m.message).replace(/\n/g, '<br>')}</div>
-            <span class="support-time">${formatTime(m.created_at)}</span>
-        </div>`;
-    }).join('');
-    supportMessages.scrollTop = supportMessages.scrollHeight;
 }
 
 async function sendSupportMessage() {
@@ -1229,10 +1651,14 @@ async function sendSupportMessage() {
     supportInput.value = '';
 
     // Optimistic render
-    const optimistic = document.createElement('div');
-    optimistic.className = 'support-bubble mine';
-    optimistic.innerHTML = `<div class="support-text">${escapeHtml(text)}</div><span class="support-time">now</span>`;
-    supportMessages.appendChild(optimistic);
+    const optimisticId = 'opt-' + Date.now();
+    appendSupportBubble(supportMessages, {
+        id: optimisticId,
+        message: text,
+        sender: 'user',
+        created_at: new Date().toISOString(),
+        _optimistic: true
+    }, 'user');
     supportMessages.scrollTop = supportMessages.scrollHeight;
 
     try {
@@ -1250,10 +1676,12 @@ async function sendSupportMessage() {
                 photo_url: getMyAvatarUrl()
             })
         });
-        // Force reload by clearing the cache key
-        lastRendered.userChat = '';
+        const opt = supportMessages.querySelector(`[data-msg-id="${optimisticId}"]`);
+        if (opt) opt.remove();
         await loadSupportMessages();
     } catch (e) {
+        const opt = supportMessages.querySelector(`[data-msg-id="${optimisticId}"]`);
+        if (opt) opt.remove();
         showToast('Failed to send message.', 'error');
     }
 }
@@ -1330,7 +1758,6 @@ function renderSupportConversations(convos) {
 async function openAdminChat(telegramId, convo) {
     state.activeSupportUser = telegramId;
     state.activeSupportUserInfo = convo || null;
-    lastRendered.adminChat = '';
 
     supportListView.style.display = 'none';
     adminChatView.style.display = 'flex';
@@ -1339,6 +1766,10 @@ async function openAdminChat(telegramId, convo) {
     // Same fallback: initials if no photo
     const avatarSrc = convo?.photo_url || buildInitialsAvatar(convo?.first_name || 'User');
     adminChatAvatar.src = avatarSrc;
+
+    // Full reload for this user: reset container and cursor
+    adminChatMessages.innerHTML = '';
+    chatCursor.admin[telegramId] = 0;
 
     await loadAdminChatMessages(telegramId);
     await fetch(`${BACKEND_URL}/api/support/mark-read`, {
@@ -1352,23 +1783,28 @@ async function openAdminChat(telegramId, convo) {
 
 async function loadAdminChatMessages(telegramId, silent = false) {
     try {
-        const resp = await fetch(`${BACKEND_URL}/api/support/messages?telegram_id=${telegramId}`);
+        const cursor = chatCursor.admin[telegramId] || 0;
+        let url = `${BACKEND_URL}/api/support/messages?telegram_id=${telegramId}`;
+        if (cursor > 0) url += `&since_id=${cursor}`;
+        const resp = await fetch(url);
         const data = await resp.json();
         const msgs = data.messages || [];
 
-        // Skip re-render if nothing changed (prevents flicker)
-        const payload = JSON.stringify(msgs.map(m => [m.id, m.message, m.created_at, m.sender]));
-        if (payload === lastRendered.adminChat) return;
-        lastRendered.adminChat = payload;
+        // If the admin navigated away mid-fetch, ignore the result
+        if (state.activeSupportUser !== telegramId) return;
 
-        adminChatMessages.innerHTML = msgs.map(m => {
-            const isMine = m.sender === 'admin';
-            return `<div class="support-bubble ${isMine ? 'mine' : 'theirs'}">
-                <div class="support-text">${escapeHtml(m.message).replace(/\n/g, '<br>')}</div>
-                <span class="support-time">${formatTime(m.created_at)}</span>
-            </div>`;
-        }).join('');
-        adminChatMessages.scrollTop = adminChatMessages.scrollHeight;
+        if (msgs.length > 0) {
+            const wasAtBottom = isScrolledToBottom(adminChatMessages);
+            msgs.forEach(m => {
+                if (m.id > (chatCursor.admin[telegramId] || 0)) {
+                    chatCursor.admin[telegramId] = m.id;
+                }
+                appendSupportBubble(adminChatMessages, m, 'admin');
+            });
+            if (wasAtBottom || cursor === 0) {
+                adminChatMessages.scrollTop = adminChatMessages.scrollHeight;
+            }
+        }
     } catch (e) {
         if (!silent) console.error('Load admin chat error:', e);
     }
@@ -1379,10 +1815,14 @@ async function sendAdminReply() {
     if (!text || !state.activeSupportUser || !state.user) return;
     adminChatInput.value = '';
 
-    const optimistic = document.createElement('div');
-    optimistic.className = 'support-bubble mine';
-    optimistic.innerHTML = `<div class="support-text">${escapeHtml(text)}</div><span class="support-time">now</span>`;
-    adminChatMessages.appendChild(optimistic);
+    const optimisticId = 'opt-' + Date.now();
+    appendSupportBubble(adminChatMessages, {
+        id: optimisticId,
+        message: text,
+        sender: 'admin',
+        created_at: new Date().toISOString(),
+        _optimistic: true
+    }, 'admin');
     adminChatMessages.scrollTop = adminChatMessages.scrollHeight;
 
     try {
@@ -1396,9 +1836,12 @@ async function sendAdminReply() {
                 admin_id: state.user.id
             })
         });
-        lastRendered.adminChat = '';
+        const opt = adminChatMessages.querySelector(`[data-msg-id="${optimisticId}"]`);
+        if (opt) opt.remove();
         await loadAdminChatMessages(state.activeSupportUser);
     } catch (e) {
+        const opt = adminChatMessages.querySelector(`[data-msg-id="${optimisticId}"]`);
+        if (opt) opt.remove();
         showToast('Failed to send reply.', 'error');
     }
 }
@@ -1416,7 +1859,6 @@ backToSupportList.addEventListener('click', () => {
     if (state.adminChatPolling) { clearInterval(state.adminChatPolling); state.adminChatPolling = null; }
     state.activeSupportUser = null;
     state.activeSupportUserInfo = null;
-    lastRendered.adminChat = '';
     adminChatView.style.display = 'none';
     supportListView.style.display = 'flex';
     // Force list refresh since state may have changed
