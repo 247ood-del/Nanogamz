@@ -5,6 +5,7 @@ import asyncio
 import threading
 import random
 import httpx
+from datetime import datetime, timedelta
 from fastapi import FastAPI, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -22,6 +23,15 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 CPAGRIP_FEED_URL = os.getenv(
     "CPAGRIP_FEED_URL",
     "https://www.cpagrip.com/common/offer_feed_json.php?user_id=YOUR_ID&pubkey=YOUR_KEY"
+)
+
+# Module-level admin list (used by both support endpoints and bot)
+ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x]
+
+# Auto-reply message shown to users on their first message
+SUPPORT_AUTO_REPLY = (
+    "Thanks for reaching out! 🙏\n\n"
+    "Our support team has received your message and will respond within 24 hours."
 )
 
 # ---- Supabase client ----
@@ -173,6 +183,174 @@ async def add_recent_game(request: Request):
         logger.error(f"Error adding recent game: {e}")
         return {"status": "error", "message": str(e)}
 
+# =============================================================================
+#  SUPPORT CHAT ENDPOINTS
+# =============================================================================
+def cleanup_old_support_conversations():
+    """Delete all messages for conversations whose latest message is older than 7 days."""
+    try:
+        cutoff = (datetime.utcnow() - timedelta(days=7)).isoformat()
+        msgs = (
+            supabase.table("support_messages")
+            .select("telegram_id, created_at")
+            .order("created_at", desc=True)
+            .execute()
+        )
+        seen = set()
+        to_delete = []
+        for m in (msgs.data or []):
+            tid = m["telegram_id"]
+            if tid in seen:
+                continue
+            seen.add(tid)
+            if (m.get("created_at") or "") < cutoff:
+                to_delete.append(tid)
+        if to_delete:
+            supabase.table("support_messages").delete().in_("telegram_id", to_delete).execute()
+            logger.info(f"Cleaned up {len(to_delete)} inactive support conversations.")
+    except Exception as e:
+        logger.error(f"Support cleanup error: {e}")
+
+@app.get("/api/support/is-admin")
+async def support_is_admin(telegram_id: int):
+    return {"is_admin": telegram_id in ADMIN_IDS}
+
+@app.post("/api/support/send")
+async def support_send(request: Request):
+    try:
+        data = await request.json()
+        telegram_id = data.get("telegram_id")
+        message = (data.get("message") or "").strip()
+        sender = data.get("sender", "user")
+        first_name = data.get("first_name") or ""
+        username = data.get("username") or ""
+        photo_url = data.get("photo_url") or ""
+        admin_id = data.get("admin_id")
+
+        if not telegram_id or not message:
+            return {"status": "error", "message": "Missing parameters"}
+
+        if sender == "admin" and admin_id not in ADMIN_IDS:
+            return {"status": "error", "message": "Unauthorized"}
+
+        # Check last message BEFORE inserting (for auto-reply logic)
+        should_auto_reply = False
+        if sender == "user":
+            last_msgs = (
+                supabase.table("support_messages")
+                .select("*")
+                .eq("telegram_id", telegram_id)
+                .order("created_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            if not last_msgs.data or not last_msgs.data[0].get("is_auto_reply"):
+                should_auto_reply = True
+
+        # Insert the user/admin message
+        supabase.table("support_messages").insert({
+            "telegram_id": telegram_id,
+            "sender": sender,
+            "message": message,
+            "first_name": first_name,
+            "username": username,
+            "photo_url": photo_url,
+            "read_by_admin": (sender == "admin"),
+            "read_by_user": (sender == "user"),
+            "is_auto_reply": False
+        }).execute()
+
+        # Send the auto-reply if this is a fresh user batch
+        if should_auto_reply:
+            supabase.table("support_messages").insert({
+                "telegram_id": telegram_id,
+                "sender": "admin",
+                "message": SUPPORT_AUTO_REPLY,
+                "read_by_admin": True,
+                "read_by_user": False,
+                "is_auto_reply": True
+            }).execute()
+
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Support send error: {e}")
+        return {"status": "error", "message": str(e)}
+
+@app.get("/api/support/messages")
+async def support_messages(telegram_id: int, since_id: Optional[int] = None):
+    try:
+        query = (
+            supabase.table("support_messages")
+            .select("*")
+            .eq("telegram_id", telegram_id)
+            .order("created_at")
+        )
+        if since_id:
+            query = query.gt("id", since_id)
+        result = query.execute()
+        return {"status": "success", "messages": result.data or []}
+    except Exception as e:
+        logger.error(f"Support messages error: {e}")
+        return {"status": "error", "messages": []}
+
+@app.get("/api/support/conversations")
+async def support_conversations(admin_id: int):
+    if admin_id not in ADMIN_IDS:
+        return {"status": "error", "message": "Unauthorized", "conversations": []}
+    try:
+        # Lazy cleanup: prune conversations inactive for > 7 days
+        cleanup_old_support_conversations()
+
+        msgs = (
+            supabase.table("support_messages")
+            .select("*")
+            .order("created_at", desc=True)
+            .execute()
+        )
+        convos = {}
+        for m in (msgs.data or []):
+            tid = m["telegram_id"]
+            if tid not in convos:
+                convos[tid] = {
+                    "telegram_id": tid,
+                    "first_name": m.get("first_name") or "User",
+                    "username": m.get("username") or "",
+                    "photo_url": m.get("photo_url") or "",
+                    "last_message": m.get("message", ""),
+                    "last_message_at": m.get("created_at"),
+                    "last_sender": m.get("sender"),
+                    "unread_count": 0
+                }
+            if m.get("sender") == "user" and not m.get("read_by_admin"):
+                convos[tid]["unread_count"] += 1
+
+        convos_list = sorted(
+            convos.values(),
+            key=lambda x: x.get("last_message_at") or "",
+            reverse=True
+        )
+        return {"status": "success", "conversations": convos_list}
+    except Exception as e:
+        logger.error(f"Support conversations error: {e}")
+        return {"status": "error", "conversations": []}
+
+@app.post("/api/support/mark-read")
+async def support_mark_read(request: Request):
+    try:
+        data = await request.json()
+        telegram_id = data.get("telegram_id")
+        viewer = data.get("viewer")  # 'admin' or 'user'
+        if not telegram_id or viewer not in ("admin", "user"):
+            return {"status": "error", "message": "Missing parameters"}
+        field = "read_by_admin" if viewer == "admin" else "read_by_user"
+        opposite_sender = "user" if viewer == "admin" else "admin"
+        supabase.table("support_messages").update({field: True}) \
+            .eq("telegram_id", telegram_id).eq("sender", opposite_sender).execute()
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Support mark-read error: {e}")
+        return {"status": "error", "message": str(e)}
+
 # ---- Helper for CPA image extraction ----
 def extract_adaptive_image(offer: dict) -> str:
     preferred_keys = [
@@ -322,21 +500,18 @@ if os.getenv("BOT_TOKEN"):
     from aiogram.filters import Command
     from aiogram.types import (
         InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo, Update,
-        InputMediaPhoto, InputMediaVideo          # <-- added for album support
+        InputMediaPhoto, InputMediaVideo
     )
     from aiogram.exceptions import TelegramBadRequest
 
     BOT_TOKEN = os.getenv("BOT_TOKEN")
-    ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x]
     WEBAPP_URL = os.getenv("WEBAPP_URL")
     RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
 
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher()
 
-    # ---------- Helper to parse pipe‑separated strings ----------
     def parse_pipe_message(raw: str):
-        """Splits raw string by '|' and returns (text, button_text, button_url)."""
         parts = [p.strip() for p in raw.split('|')]
         if len(parts) != 3:
             raise ValueError("Expected 3 parts separated by '|': text | button label | URL")
@@ -370,22 +545,17 @@ if os.getenv("BOT_TOKEN"):
         ])
         await message.answer("🛠 Admin Panel", reply_markup=keyboard)
 
-    # ---------- /post command to broadcast text with button ----------
     @dp.message(Command("post"), F.from_user.id.in_(ADMIN_IDS))
     async def cmd_post(message: types.Message):
-        """Broadcast a text message with an inline button to @nanogamz."""
         try:
             raw = message.text.replace('/post', '', 1).strip()
             if not raw:
                 await message.reply("❌ Please provide the message in the format:\n`/post Your text | Button label | https://example.com`", parse_mode="Markdown")
                 return
-
             text, btn_text, url = parse_pipe_message(raw)
-
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text=btn_text, url=url)]
             ])
-
             await bot.send_message(
                 chat_id="@nanogamz",
                 text=text,
@@ -399,21 +569,14 @@ if os.getenv("BOT_TOKEN"):
             logger.error(f"Error in /post: {e}")
             await message.reply(f"❌ Failed to send post: {str(e)[:200]}")
 
-    # ---------- NEW: album storage for media groups ----------
     album_storage = {}
 
-    # ---------- UPDATED: album processor (delayed) ----------
     async def process_album_after_delay(group_id: str, admin_chat_id: int):
-        """Waits for album messages to collect and posts them to @nanogamz."""
-        await asyncio.sleep(1.5)  # Wait for Telegram to receive all files in the album
+        await asyncio.sleep(1.5)
         messages = album_storage.pop(group_id, [])
         if not messages:
             return
-
-        # Extract caption from the first message that has one
         raw_caption = next((m.caption for m in messages if m.caption), None)
-        
-        # Strip optional /post prefix if present
         if raw_caption and raw_caption.startswith('/post'):
             raw_caption = raw_caption.replace('/post', '', 1).strip()
 
@@ -424,30 +587,25 @@ if os.getenv("BOT_TOKEN"):
             except Exception as e:
                 logger.error(f"Pipe parse error: {e}")
 
-        # Build media list with caption initialized directly
         media_list = []
         for idx, m in enumerate(messages):
             item_caption = caption if idx == 0 else None
             parse_mode = "Markdown" if idx == 0 and caption else None
-
             if m.photo:
                 media_list.append(InputMediaPhoto(
-                    media=m.photo[-1].file_id, 
-                    caption=item_caption, 
+                    media=m.photo[-1].file_id,
+                    caption=item_caption,
                     parse_mode=parse_mode
                 ))
             elif m.video:
                 media_list.append(InputMediaVideo(
-                    media=m.video.file_id, 
-                    caption=item_caption, 
+                    media=m.video.file_id,
+                    caption=item_caption,
                     parse_mode=parse_mode
                 ))
 
         try:
-            # 1. Send album
             await bot.send_media_group(chat_id="@nanogamz", media=media_list)
-
-            # 2. Send follow-up button if button details exist
             if btn_text and url:
                 keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=btn_text, url=url)]])
                 await bot.send_message(
@@ -456,28 +614,22 @@ if os.getenv("BOT_TOKEN"):
                     reply_markup=keyboard,
                     parse_mode="Markdown"
                 )
-
             await bot.send_message(chat_id=admin_chat_id, text="✅ Album published to @nanogamz.")
         except Exception as e:
             logger.error(f"Error publishing album: {e}")
             await bot.send_message(chat_id=admin_chat_id, text=f"❌ Album failed: {str(e)[:200]}")
 
-    # ---------- UPDATED: media (photo/video) broadcast handler ----------
     @dp.message(F.photo | F.video, F.from_user.id.in_(ADMIN_IDS))
     async def handle_media_post(message: types.Message):
-        """Handles single media and album broadcasts to @nanogamz."""
         try:
-            # 1. Handle Album / Media Group
             if message.media_group_id:
                 gid = message.media_group_id
                 if gid not in album_storage:
                     album_storage[gid] = []
                     asyncio.create_task(process_album_after_delay(gid, message.chat.id))
-
                 album_storage[gid].append(message)
                 return
 
-            # 2. Handle Single Photo or Video
             if not message.caption:
                 await message.reply("❌ Please provide a caption in the format:\n`Caption text | Button label | https://example.com`", parse_mode="Markdown")
                 return
@@ -495,7 +647,6 @@ if os.getenv("BOT_TOKEN"):
                 await bot.send_video(chat_id="@nanogamz", video=message.video.file_id, caption=caption, reply_markup=keyboard, parse_mode="Markdown")
 
             await message.reply("✅ Media post published to @nanogamz.")
-
         except ValueError as e:
             await message.reply(f"❌ Format Error: {e}\n\nUse format:\n`Caption text | Button label | https://example.com`", parse_mode="Markdown")
         except Exception as e:
@@ -614,7 +765,6 @@ if os.getenv("BOT_TOKEN"):
 
     @app.api_route("/api/telegram-webhook", methods=["GET", "POST"])
     async def telegram_webhook(request: Request):
-        """Handle incoming Telegram updates (accepts both GET and POST)."""
         if request.method == "GET":
             return {"status": "Webhook endpoint is active"}
         try:
@@ -631,7 +781,6 @@ if os.getenv("BOT_TOKEN"):
 
     @app.get("/api/set-webhook")
     async def set_webhook_manual(request: Request):
-        """Manually set the webhook URL."""
         try:
             render_url = os.getenv("RENDER_EXTERNAL_URL")
             if render_url:
@@ -651,7 +800,6 @@ if os.getenv("BOT_TOKEN"):
 
     @app.get("/api/webhook-status")
     async def webhook_status():
-        """Return current webhook info."""
         try:
             info = await bot.get_webhook_info()
             return {
@@ -667,9 +815,14 @@ if os.getenv("BOT_TOKEN"):
             logger.error(f"Failed to get webhook info: {e}", exc_info=True)
             return {"status": "error", "message": str(e)}
 
-    # ---- Startup event (only on Render) ----
     @app.on_event("startup")
     async def startup_render():
+        # One-time cleanup of old support conversations on boot
+        try:
+            cleanup_old_support_conversations()
+        except Exception as e:
+            logger.error(f"Startup support cleanup error: {e}")
+
         if RENDER_EXTERNAL_URL:
             expected_url = f"{RENDER_EXTERNAL_URL.rstrip('/')}/api/telegram-webhook"
             try:
@@ -682,7 +835,6 @@ if os.getenv("BOT_TOKEN"):
             except Exception as e:
                 logger.error(f"Failed to set webhook: {e}")
 
-        # Start pinger
         import ping
         def start_pinger():
             ping.run_pinger()
