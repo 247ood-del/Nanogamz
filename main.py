@@ -299,6 +299,27 @@ async def support_messages(telegram_id: int, since_id: Optional[int] = None):
         logger.error(f"Support messages error: {e}")
         return {"status": "error", "messages": []}
 
+@app.get("/api/support/unread-count")
+async def support_unread_count(telegram_id: int):
+    """Lightweight count of admin messages the given user hasn't read yet.
+
+    Used by the frontend to badge the Support menu link without having to
+    download the entire conversation history on every poll.
+    """
+    try:
+        result = (
+            supabase.table("support_messages")
+            .select("id", count="exact")
+            .eq("telegram_id", telegram_id)
+            .eq("sender", "admin")
+            .eq("read_by_user", False)
+            .execute()
+        )
+        return {"count": result.count or 0}
+    except Exception as e:
+        logger.error(f"Unread count error: {e}")
+        return {"count": 0}
+
 @app.get("/api/support/conversations")
 async def support_conversations(admin_id: int):
     if admin_id not in ADMIN_IDS:
@@ -311,6 +332,7 @@ async def support_conversations(admin_id: int):
             supabase.table("support_messages")
             .select("*")
             .order("created_at", desc=True)
+            .limit(2000)
             .execute()
         )
 
@@ -318,12 +340,17 @@ async def support_conversations(admin_id: int):
         for m in (msgs.data or []):
             tid = m["telegram_id"]
             if tid not in convos:
+                raw_last = m.get("message", "") or ""
+                if raw_last.startswith("__IMG__"):
+                    preview = "📷 Image"
+                else:
+                    preview = raw_last
                 convos[tid] = {
                     "telegram_id": tid,
                     "first_name": "",
                     "username": "",
                     "photo_url": "",
-                    "last_message": m.get("message", ""),
+                    "last_message": preview,
                     "last_message_at": m.get("created_at"),
                     "last_sender": m.get("sender"),
                     "unread_count": 0
