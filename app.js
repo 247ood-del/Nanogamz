@@ -1270,6 +1270,19 @@ function appendSupportBubble(container, msg, role) {
             e.stopPropagation();
             openImagePreview(dataUrl);
         });
+        
+        // ✅ FIX: Handle broken/truncated base64 images
+        img.onerror = () => {
+            img.style.display = 'none';
+            const fallback = document.createElement('div');
+            fallback.style.padding = '10px';
+            fallback.style.fontSize = '12px';
+            fallback.style.color = '#ff5555';
+            fallback.style.textAlign = 'center';
+            fallback.textContent = '❌ Image failed to load (too large or corrupted)';
+            bubble.appendChild(fallback);
+        };
+        
         bubble.appendChild(img);
     } else {
         const textEl = document.createElement('div');
@@ -1408,6 +1421,11 @@ function compressImage(file, maxDim = 800, quality = 0.72) {
             canvas.width = width;
             canvas.height = height;
             const ctx = canvas.getContext('2d');
+
+            // ✅ FIX: Fill canvas with white background to prevent transparent PNGs turning black in JPEG
+            ctx.fillStyle = '#FFFFFF';
+            ctx.fillRect(0, 0, width, height);
+
             ctx.drawImage(img, 0, 0, width, height);
             try {
                 resolve(canvas.toDataURL('image/jpeg', quality));
