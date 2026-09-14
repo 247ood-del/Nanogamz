@@ -1405,6 +1405,15 @@ safeOn('imagePreviewModal', 'click', (e) => {
 // ✅ FIX 1: maxDim lowered 800 -> 600 and quality 0.72 -> 0.55. This keeps
 // the resulting base64 string well under backend payload limits
 // (Render / Vercel / FastAPI default body size), preventing 413 errors.
+//
+// ✅ FIX 2 (this change): Read the actual intrinsic dimensions from
+// `img.naturalWidth` / `img.naturalHeight` INSIDE the onload handler.
+// Previously the code destructured `{ width, height } = img`, which could
+// evaluate to 0 in some WebViews, causing `ctx.drawImage(img, 0, 0, 0, 0)`
+// to draw nothing while `ctx.fillRect` painted the entire canvas solid
+// white — hence the "plain white image" bug. Using naturalWidth/naturalHeight
+// (with a fallback to width/height) guarantees valid dimensions are always
+// used, so the drawn image actually lands on the canvas.
 function compressImage(file, maxDim = 600, quality = 0.55) {
     return new Promise((resolve) => {
         const reader = new FileReader();
@@ -1413,7 +1422,10 @@ function compressImage(file, maxDim = 600, quality = 0.55) {
             const img = new Image();
             
             img.onload = () => {
-                let { width, height } = img;
+                // Ensure correct source dimensions are captured
+                let width = img.naturalWidth || img.width;
+                let height = img.naturalHeight || img.height;
+
                 if (width > maxDim || height > maxDim) {
                     if (width > height) {
                         height = Math.round((height * maxDim) / width);
@@ -1429,10 +1441,11 @@ function compressImage(file, maxDim = 600, quality = 0.55) {
                 canvas.height = height;
                 const ctx = canvas.getContext('2d');
 
-                // ✅ FIX: Fill canvas with white background to prevent transparent PNGs turning black in JPEG
+                // Fill background (for non-transparent JPEGs)
                 ctx.fillStyle = '#FFFFFF';
                 ctx.fillRect(0, 0, width, height);
 
+                // Draw resized image onto canvas
                 ctx.drawImage(img, 0, 0, width, height);
                 
                 try {
@@ -1448,7 +1461,6 @@ function compressImage(file, maxDim = 600, quality = 0.55) {
                 resolve(null);
             };
             
-            // ✅ FIX: Use the FileReader Data URL instead of a blob URL
             img.src = e.target.result;
         };
         
@@ -1457,7 +1469,6 @@ function compressImage(file, maxDim = 600, quality = 0.55) {
             resolve(null);
         };
         
-        // ✅ FIX: Read the file as a Data URL (guarantees full image availability)
         reader.readAsDataURL(file);
     });
 }
