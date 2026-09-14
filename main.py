@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from fastapi import FastAPI, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from supabase import create_client, Client
 import requests
 from typing import Optional
@@ -45,6 +46,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ---- Base directory (folder that contains main.py, index.html, app.js, style.css) ----
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ---- Mount static folders (common) ----
 if os.path.exists("ads"):
@@ -903,5 +907,16 @@ if os.getenv("BOT_TOKEN"):
         thread.start()
         logger.info("Background pinger started")
 
-# ---- Serve static files (MUST BE LAST - catches any unmatched routes) ----
-app.mount("/", StaticFiles(directory=os.path.dirname(__file__), html=True), name="static")
+# =============================================================================
+#  ROOT STATIC SERVING  (Option 2 – files live in the same directory as main.py)
+# =============================================================================
+# 1. Serve index.html explicitly at the root URL.
+#    This makes `/` deterministic and independent of StaticFiles(html=True) behavior.
+@app.get("/")
+async def serve_index():
+    return FileResponse(os.path.join(BASE_DIR, "index.html"))
+
+# 2. Serve app.js, style.css, ads.js, assets, etc. directly from the root
+#    directory (no /static prefix needed).
+#    MUST BE LAST so it does not override any /api/* routes above.
+app.mount("/", StaticFiles(directory=BASE_DIR, html=True), name="static")
