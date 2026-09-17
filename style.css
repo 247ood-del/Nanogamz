@@ -850,13 +850,26 @@ body.search-open .game-grid {
 
 .support-messages {
     flex: 1;
+    /* NEW: min-height: 0 lets the flex child actually scroll instead of
+       forcing the parent to grow. Without this, some WebViews (including
+       Telegram's) get confused and render content in a "loop". */
+    min-height: 0;
     overflow-y: auto;
     padding: 16px;
     display: flex;
     flex-direction: column;
     gap: 8px;
     -webkit-overflow-scrolling: touch;
-}
+    /* NEW: stop scroll-chaining & scroll-anchor weirdness that caused the
+       "scrolling past the last message shows the first message" bug. */
+    overscroll-behavior: contain;
+    overflow-anchor: none;
+    /* Solid background so no content from behind bleeds through. */
+    background: var(--bg);
+    /* Ensure children are laid out at the top when content is short. */
+    justify-content: flex-start;
+    }
+
 .support-empty {
     text-align: center;
     margin-top: 60px;
@@ -1076,6 +1089,9 @@ body.search-open .game-grid {
     gap: 6px;
     max-width: 88%;
     animation: supportBubbleIn 0.15s ease-out;
+    /* NEW: never let a message row get vertically squashed or grow */
+    flex-shrink: 0;
+    flex-grow: 0;
 }
 .support-msg-row.mine {
     align-self: flex-end;
@@ -1295,6 +1311,9 @@ body.search-open .game-grid {
     width: 100%;
     position: relative;
     animation: supportBubbleIn 0.2s ease-out;
+    /* NEW: never shrink, never grow — keeps the divider as a stable 1px row */
+    flex-shrink: 0;
+    flex-grow: 0;
 }
 .unread-divider::before,
 .unread-divider::after {
