@@ -25,6 +25,8 @@ CPAGRIP_FEED_URL = os.getenv(
     "CPAGRIP_FEED_URL",
     "https://www.cpagrip.com/common/offer_feed_json.php?user_id=YOUR_ID&pubkey=YOUR_KEY"
 )
+# NEW: ImgBB API key for image uploads (support chat images now live on ImgBB)
+IMGBB_API_KEY = os.getenv("IMGBB_API_KEY")
 
 # Module-level admin list (used by both support endpoints and bot)
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x]
@@ -219,13 +221,75 @@ def cleanup_old_support_conversations():
 async def support_is_admin(telegram_id: int):
     return {"is_admin": telegram_id in ADMIN_IDS}
 
+# =============================================================================
+#  IMAGE UPLOAD PROXY (ImgBB)  – replaces the old base64-in-DB approach
+# =============================================================================
+@app.post("/api/support/upload-image")
+async def support_upload_image(request: Request):
+    """
+    Accepts JSON: { "image": "<base64 or data-url>" } and proxies it to ImgBB.
+    Returns: { "status": "success", "url": "https://i.ibb.co/..." }
+
+    The frontend then sends that URL as a normal support message with the
+    `__IMG__` prefix, so nothing else in the pipeline needs to change.
+    """
+    if not IMGBB_API_KEY:
+        logger.error("IMGBB_API_KEY is not set on the server.")
+        return {"status": "error", "message": "Image upload is not configured."}, 500
+
+    try:
+        data = await request.json()
+    except Exception as e:
+        logger.error(f"upload-image JSON parse error (payload may be too large): {e}")
+        return {"status": "error", "message": "Invalid or oversized payload."}, 413
+
+    image_data = data.get("image") or ""
+    if not image_data:
+        return {"status": "error", "message": "Missing image data."}, 400
+
+    # Strip `data:image/...;base64,` prefix if the client sent one
+    if image_data.startswith("data:"):
+        try:
+            image_data = image_data.split(",", 1)[1]
+        except Exception:
+            return {"status": "error", "message": "Malformed data URL."}, 400
+
+    # Soft size check on the base64 string (~5 MB decoded)
+    if len(image_data) > 7_000_000:
+        return {"status": "error", "message": "Image is too large."}, 413
+
+    try:
+        resp = requests.post(
+            "https://api.imgbb.com/1/upload",
+            data={"key": IMGBB_API_KEY, "image": image_data},
+            timeout=30,
+        )
+        try:
+            result = resp.json()
+        except Exception:
+            result = {}
+
+        if resp.status_code == 200 and isinstance(result, dict) and result.get("success"):
+            payload = result.get("data") or {}
+            url = (
+                payload.get("display_url")
+                or payload.get("url")
+                or (payload.get("thumb") or {}).get("url")
+            )
+            if url:
+                logger.info(f"ImgBB upload OK: {url}")
+                return {"status": "success", "url": url}
+
+        logger.error(f"ImgBB upload failed: status={resp.status_code} body={str(result)[:300]}")
+        return {"status": "error", "message": "ImgBB upload failed."}, 502
+    except Exception as e:
+        logger.error(f"ImgBB proxy error: {e}")
+        return {"status": "error", "message": str(e)}, 500
+
 @app.post("/api/support/send")
 async def support_send(request: Request):
-    # ✅ FIX 3: Parse the body in its own try/except. When a high-resolution
-    # image is sent as base64 (even after client-side compression), an oversized
-    # JSON payload can make Starlette/Uvicorn/Gunicorn raise an error during
-    # request.json(). We catch that here and return a proper 413 so the client
-    # can show a helpful message instead of a raw 500.
+    # Parse body in its own try/except: oversized JSON payloads can make
+    # Starlette/Uvicorn raise during request.json(); we return a proper 413.
     try:
         data = await request.json()
     except Exception as parse_err:
@@ -278,9 +342,6 @@ async def support_send(request: Request):
         }).execute()
 
         # Send the auto-reply if this is a fresh user batch.
-        # IMPORTANT: also store the user's info on the auto-reply row so that
-        # the conversation always has a name & photo even when the auto-reply
-        # happens to be the latest message.
         if should_auto_reply:
             supabase.table("support_messages").insert({
                 "telegram_id": telegram_id,
@@ -318,11 +379,7 @@ async def support_messages(telegram_id: int, since_id: Optional[int] = None):
 
 @app.get("/api/support/unread-count")
 async def support_unread_count(telegram_id: int):
-    """Lightweight count of admin messages the given user hasn't read yet.
-
-    Used by the frontend to badge the Support menu link without having to
-    download the entire conversation history on every poll.
-    """
+    """Lightweight count of admin messages the given user hasn't read yet."""
     try:
         result = (
             supabase.table("support_messages")
@@ -342,7 +399,6 @@ async def support_conversations(admin_id: int):
     if admin_id not in ADMIN_IDS:
         return {"status": "error", "message": "Unauthorized", "conversations": []}
     try:
-        # Lazy cleanup: prune conversations inactive for > 7 days
         cleanup_old_support_conversations()
 
         msgs = (
@@ -372,8 +428,6 @@ async def support_conversations(admin_id: int):
                     "last_sender": m.get("sender"),
                     "unread_count": 0
                 }
-            # Backfill user info from ANY message that carries it
-            # (so auto-reply rows don't hide the user's name/photo)
             if not convos[tid]["first_name"] and m.get("first_name"):
                 convos[tid]["first_name"] = m["first_name"]
             if not convos[tid]["photo_url"] and m.get("photo_url"):
@@ -384,7 +438,6 @@ async def support_conversations(admin_id: int):
             if m.get("sender") == "user" and not m.get("read_by_admin"):
                 convos[tid]["unread_count"] += 1
 
-        # Final fallback name
         for c in convos.values():
             if not c["first_name"]:
                 c["first_name"] = "User"
@@ -558,7 +611,7 @@ async def get_cpa_offers(request: Request):
         return {"success": True, "ads": native_ads}
 
 # =============================================================================
-#  BOT & WEBHOOK – DEFINED BEFORE THE ROOT STATIC MOUNT TO AVOID OVERRIDING
+#  BOT & WEBHOOK
 # =============================================================================
 if os.getenv("BOT_TOKEN"):
     from aiogram import Bot, Dispatcher, types, F
@@ -882,7 +935,6 @@ if os.getenv("BOT_TOKEN"):
 
     @app.on_event("startup")
     async def startup_render():
-        # One-time cleanup of old support conversations on boot
         try:
             cleanup_old_support_conversations()
         except Exception as e:
@@ -908,15 +960,10 @@ if os.getenv("BOT_TOKEN"):
         logger.info("Background pinger started")
 
 # =============================================================================
-#  ROOT STATIC SERVING  (Option 2 – files live in the same directory as main.py)
+#  ROOT STATIC SERVING
 # =============================================================================
-# 1. Serve index.html explicitly at the root URL.
-#    This makes `/` deterministic and independent of StaticFiles(html=True) behavior.
 @app.get("/")
 async def serve_index():
     return FileResponse(os.path.join(BASE_DIR, "index.html"))
 
-# 2. Serve app.js, style.css, ads.js, assets, etc. directly from the root
-#    directory (no /static prefix needed).
-#    MUST BE LAST so it does not override any /api/* routes above.
 app.mount("/", StaticFiles(directory=BASE_DIR, html=True), name="static")
