@@ -1282,3 +1282,42 @@ body.search-open .game-grid {
     align-items: center;
     justify-content: center;
 }
+/* ========================================================================== */
+/*  UNREAD DIVIDER — shown above the first unread message when a chat opens   */
+/* ========================================================================== */
+.unread-divider {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    margin: 14px 4px;
+    align-self: stretch;
+    width: 100%;
+    position: relative;
+    animation: supportBubbleIn 0.2s ease-out;
+}
+.unread-divider::before,
+.unread-divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: linear-gradient(
+        to right,
+        transparent,
+        rgba(108, 92, 231, 0.55),
+        transparent
+    );
+}
+.unread-divider span {
+    display: inline-block;
+    padding: 4px 12px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    color: var(--accent);
+    background: rgba(108, 92, 231, 0.12);
+    border: 1px solid rgba(108, 92, 231, 0.35);
+    border-radius: 10px;
+    white-space: nowrap;
+}
