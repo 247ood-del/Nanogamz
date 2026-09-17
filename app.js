@@ -117,7 +117,9 @@ const state = {
     userUnreadPolling: null,
     activeSupportUser: null,
     activeSupportUserInfo: null,
-    myAvatarUrl: null
+    myAvatarUrl: null,
+    // NEW: guard so overlapping user-side loads can't double-append history.
+    loadingUserMessages: false
 };
 
 // ------------------------ TELEGRAM WEBAPP ------------------------
@@ -1749,11 +1751,24 @@ function insertUnreadDivider(container, firstUnreadId) {
 }
 
 // -------------------- USER SIDE --------------------
+// FIXED: previously this fetched ALL messages on every poll and re-appended
+// them all, which duplicated the chat history every 5 seconds and made the
+// scroll appear to "loop" (last message → first message and vice versa).
+// Now we mirror the admin logic: after the first load, we only request
+// messages with id > chatCursor.user using &since_id=. A guard also prevents
+// concurrent loads from double-appending.
 async function loadSupportMessages(silent = false) {
     if (!state.user || !state.user.id || !supportMessages) return;
+    if (state.loadingUserMessages) return;
+    state.loadingUserMessages = true;
+
     const isFirstLoad = chatCursor.user === 0;
     try {
-        const url = `${BACKEND_URL}/api/support/messages?telegram_id=${state.user.id}`;
+        let url = `${BACKEND_URL}/api/support/messages?telegram_id=${state.user.id}`;
+        if (!isFirstLoad) {
+            url += `&since_id=${chatCursor.user}`;
+        }
+
         const resp = await fetch(url);
         const data = await resp.json();
         const msgs = data.messages || [];
@@ -1799,6 +1814,8 @@ async function loadSupportMessages(silent = false) {
         updateSupportBadge(0);
     } catch (e) {
         if (!silent) console.error('Load support messages error:', e);
+    } finally {
+        state.loadingUserMessages = false;
     }
 }
 
