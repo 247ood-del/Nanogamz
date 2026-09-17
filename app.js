@@ -1142,7 +1142,6 @@ const lastRendered = {
     conversations: ''
 };
 
-// Cursor map so we only download NEW messages on each poll.
 const chatCursor = {
     user: 0,
     admin: {}  // telegram_id -> last seen message id
@@ -1224,9 +1223,8 @@ async function copyToClipboard(text) {
 // Append a single bubble (text or image) with its copy button.
 // `role` is 'user' or 'admin' — determines which sender means "mine".
 //
-// ✅ IMAGE HANDLING CHANGED: images are now stored as URLs (https://i.ibb.co/…)
-// after being uploaded to ImgBB. We still use the `__IMG__` prefix so the
-// wire format stays compatible; the payload after the prefix is now a URL.
+// IMAGE HANDLING: images are stored as URLs (https://i.ibb.co/…) after being
+// uploaded to ImgBB. We still use the `__IMG__` prefix for compatibility.
 function appendSupportBubble(container, msg, role) {
     if (!container) return;
     const isMine = role === 'user' ? msg.sender === 'user' : msg.sender === 'admin';
@@ -1255,7 +1253,6 @@ function appendSupportBubble(container, msg, role) {
             openImagePreview(imageSrc);
         });
 
-        // Simple network-error fallback – no more "too large/corrupted" wording
         img.onerror = () => {
             img.style.display = 'none';
             const fallback = document.createElement('div');
@@ -1381,8 +1378,8 @@ safeOn('imagePreviewModal', 'click', (e) => {
 });
 
 // -------------------- IMAGE COMPRESSION --------------------
-// We still compress before uploading so ImgBB uploads are fast & the
-// request body stays small.
+// We compress before uploading so ImgBB uploads are fast & the request body
+// stays small.
 function compressImage(file, maxDim = 1600, quality = 0.85) {
     return new Promise((resolve) => {
         const reader = new FileReader();
@@ -1439,8 +1436,7 @@ function compressImage(file, maxDim = 1600, quality = 0.85) {
 }
 
 // -------------------- IMAGE UPLOAD TO IMGBB (via backend proxy) --------------------
-// The backend proxies the base64 payload to ImgBB and returns a hosted URL.
-// We do this via our own backend so the ImgBB API key never touches the client.
+// Returns { url, delete_url } or null on failure.
 async function uploadImageToServer(dataUrl) {
     if (!dataUrl) return null;
     try {
@@ -1455,7 +1451,7 @@ async function uploadImageToServer(dataUrl) {
         }
         const data = await resp.json();
         if (data.status === 'success' && data.url) {
-            return data.url;
+            return { url: data.url, delete_url: data.delete_url || null };
         }
         console.error('Upload error:', data.message);
         return null;
@@ -1484,7 +1480,6 @@ function setupImageUpload(clipBtnId, inputId, senderType) {
             showToast('Only image files are allowed.', 'error');
             return;
         }
-        // Allow larger originals now since we compress + offload to ImgBB.
         if (file.size > 15 * 1024 * 1024) {
             showToast('Image must be under 15MB.', 'error');
             return;
@@ -1498,18 +1493,20 @@ function setupImageUpload(clipBtnId, inputId, senderType) {
         }
 
         showToast('Uploading image…', 'info', 4000);
-        const imageUrl = await uploadImageToServer(dataUrl);
-        if (!imageUrl) {
+        const upload = await uploadImageToServer(dataUrl);
+        if (!upload || !upload.url) {
             showToast('Failed to upload image. Please try again.', 'error');
             return;
         }
 
-        await sendImageMessage(imageUrl, senderType);
+        await sendImageMessage(upload.url, senderType, upload.delete_url);
     });
 }
 
 // Sends a message with `__IMG__<url>` as its payload.
-async function sendImageMessage(imageUrl, sender) {
+// `imageDeleteUrl` (optional) is the ImgBB delete URL, stored so that the
+// 7-day cleanup routine can also remove the image from ImgBB.
+async function sendImageMessage(imageUrl, sender, imageDeleteUrl = null) {
     if (!state.user || !imageUrl) return;
 
     const message = `__IMG__${imageUrl}`;
@@ -1539,7 +1536,8 @@ async function sendImageMessage(imageUrl, sender) {
                     sender: 'user',
                     first_name: state.user.first_name || '',
                     username: state.user.username || '',
-                    photo_url: getMyAvatarUrl()
+                    photo_url: getMyAvatarUrl(),
+                    image_delete_url: imageDeleteUrl || null
                 })
             });
             const opt = supportMessages?.querySelector(`[data-msg-id="${optimisticId}"]`);
@@ -1575,7 +1573,8 @@ async function sendImageMessage(imageUrl, sender) {
                     telegram_id: state.activeSupportUser,
                     message,
                     sender: 'admin',
-                    admin_id: state.user.id
+                    admin_id: state.user.id,
+                    image_delete_url: imageDeleteUrl || null
                 })
             });
             const opt = adminChatMessages?.querySelector(`[data-msg-id="${optimisticId}"]`);
@@ -1666,11 +1665,10 @@ function openSupport() {
         if (supportListView) supportListView.style.display = 'none';
         if (adminChatView) adminChatView.style.display = 'none';
         if (supportChatView) supportChatView.style.display = 'flex';
-        // Clear the badge immediately — we're about to mark them read
         updateSupportBadge(0);
 
-        // ✅ NEW: Force a full history load on every open so that
-        // the "first unread" divider shows up correctly every time.
+        // Force a full history load on every open so the "first unread"
+        // divider is correctly placed and the scroll position is fresh.
         chatCursor.user = 0;
         if (supportMessages) supportMessages.innerHTML = '';
 
@@ -1725,14 +1723,13 @@ function startAdminChatPolling() {
 }
 
 // -------------------- UNREAD DIVIDER HELPERS --------------------
-// Insert a "New Messages" divider right above the first unread message
-// and smoothly scroll it into the middle of the viewport.
+// Insert a "New Messages" divider right above the first unread message and
+// smoothly scroll it into the middle of the viewport.
 function insertUnreadDivider(container, firstUnreadId) {
     if (!container || !firstUnreadId) return false;
     const target = container.querySelector(`[data-msg-id="${firstUnreadId}"]`);
     if (!target || !target.parentNode) return false;
 
-    // Avoid double-inserting
     if (container.querySelector('.unread-divider')) return false;
 
     const divider = document.createElement('div');
@@ -1744,7 +1741,6 @@ function insertUnreadDivider(container, firstUnreadId) {
         try {
             target.scrollIntoView({ block: 'center', behavior: 'auto' });
         } catch {
-            // older WebViews
             const top = target.offsetTop - container.clientHeight / 2;
             container.scrollTop = Math.max(0, top);
         }
@@ -1762,8 +1758,6 @@ async function loadSupportMessages(silent = false) {
         const data = await resp.json();
         const msgs = data.messages || [];
 
-        // Detect the first unread admin message BEFORE we render (so we
-        // can draw a divider and scroll to it).
         let firstUnreadId = null;
         if (isFirstLoad && msgs.length > 0) {
             const firstUnread = msgs.find(m => m.sender === 'admin' && !m.read_by_user);
@@ -1781,7 +1775,6 @@ async function loadSupportMessages(silent = false) {
                 appendSupportBubble(supportMessages, m, 'user');
             });
 
-            // Scroll behavior: prefer unread divider, else bottom.
             const dividerInserted = firstUnreadId
                 ? insertUnreadDivider(supportMessages, firstUnreadId)
                 : false;
@@ -1798,8 +1791,6 @@ async function loadSupportMessages(silent = false) {
                 </div>`;
         }
 
-        // Mark admin messages as read for the user (after we've already
-        // captured the unread divider position)
         await fetch(`${BACKEND_URL}/api/support/mark-read`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1928,7 +1919,6 @@ async function openAdminChat(telegramId, convo) {
     const avatarSrc = convo?.photo_url || buildInitialsAvatar(convo?.first_name || 'User');
     if (adminChatAvatar) adminChatAvatar.src = avatarSrc;
 
-    // Reset container + cursor so we can render the unread divider correctly
     if (adminChatMessages) adminChatMessages.innerHTML = '';
     chatCursor.admin[telegramId] = 0;
 
@@ -1955,7 +1945,6 @@ async function loadAdminChatMessages(telegramId, silent = false) {
 
         if (state.activeSupportUser !== telegramId) return;
 
-        // Find first unread user message (before rendering)
         let firstUnreadId = null;
         if (isFirstLoad && msgs.length > 0) {
             const firstUnread = msgs.find(m => m.sender === 'user' && !m.read_by_admin);
