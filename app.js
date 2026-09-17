@@ -80,8 +80,6 @@ function formatTime(iso) {
     }
 }
 
-// Defensive listener helper – prevents crashes when HTML is stale/cached
-// and an element referenced by JS no longer exists.
 function safeOn(id, event, handler, options) {
     const el = document.getElementById(id);
     if (el) el.addEventListener(event, handler, options);
@@ -112,38 +110,28 @@ const state = {
     savedLimit: 20,
     savedHasMore: true,
     loadingSaved: false,
-    // --- Support chat ---
     isAdmin: false,
     supportPolling: null,
     adminListPolling: null,
     adminChatPolling: null,
-    // NEW: user-side unread-count poller (kept inside state so there is no
-    // Temporal Dead Zone risk at module init – see previous crash).
     userUnreadPolling: null,
     activeSupportUser: null,
     activeSupportUserInfo: null,
-    // Cached avatar data URL generated client-side (fallback when Telegram
-    // doesn't provide photo_url — which is most of the time)
     myAvatarUrl: null
 };
 
 // ------------------------ TELEGRAM WEBAPP ------------------------
-// Use optional chaining so a missing/failed telegram-web-app.js script
-// cannot crash the whole app.
 const tg = (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
 if (tg) {
     try { tg.ready(); } catch (e) { /* ignore */ }
     try { tg.expand(); } catch (e) { /* ignore */ }
 }
 
-// Build a small data-URL avatar from the user's initial.
-// Cached so we only build it once per session.
 function buildInitialsAvatar(name) {
     const initials = (name?.[0] || 'U').toUpperCase();
     const canvas = document.createElement('canvas');
     canvas.width = 96; canvas.height = 96;
     const ctx = canvas.getContext('2d');
-    // Pick a stable colour from the name
     const palette = ['#6c5ce7','#e17055','#00b894','#0984e3','#fd79a8','#fdcb6e','#a29bfe','#55efc4'];
     let hash = 0;
     for (let i = 0; i < (name || 'U').length; i++) hash = (hash * 31 + name.charCodeAt(i)) | 0;
@@ -403,7 +391,6 @@ async function initAdCarousel() {
         state.swiperAd.destroy(true, true);
     }
 
-    // Guard: if Swiper CDN failed to load (blocked network etc.)
     if (typeof Swiper === 'undefined') return;
 
     try {
@@ -1155,9 +1142,7 @@ const lastRendered = {
     conversations: ''
 };
 
-// Cursor map so we only download NEW messages on each poll (avoids re-fetching
-// large image payloads every 5 seconds). The list view still uses the cached
-// payload check to prevent blinking.
+// Cursor map so we only download NEW messages on each poll.
 const chatCursor = {
     user: 0,
     admin: {}  // telegram_id -> last seen message id
@@ -1169,13 +1154,10 @@ function isScrolledToBottom(el) {
 
 // -------------------- MESSAGE RENDERING HELPERS --------------------
 
-// Turn plain text into safe HTML where URLs and long numbers become
-// interactive, underlined elements. Newlines become <br>.
 function linkifyMessage(text) {
     if (!text) return '';
 
     const tokens = [];
-    // Match either a URL or a long enough number sequence (TG id, phone, etc.)
     const regex = /(https?:\/\/[^\s<>"']+)|(\+?\d[\d\s\-()]{4,}\d)/g;
     let lastIndex = 0;
     let match;
@@ -1185,7 +1167,6 @@ function linkifyMessage(text) {
             tokens.push({ type: 'text', value: text.slice(lastIndex, match.index) });
         }
         if (match[1]) {
-            // Trim trailing punctuation so "(https://x.com)." doesn't include ")." 
             let url = match[1];
             let trailing = '';
             const t = url.match(/[.,;:!?)\]]+$/);
@@ -1217,7 +1198,6 @@ function linkifyMessage(text) {
     }).join('');
 }
 
-// Robust clipboard copy with fallback for older webviews.
 async function copyToClipboard(text) {
     try {
         if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -1242,7 +1222,11 @@ async function copyToClipboard(text) {
 }
 
 // Append a single bubble (text or image) with its copy button.
-// `role` is 'user' or 'admin' — it determines which sender means "mine".
+// `role` is 'user' or 'admin' — determines which sender means "mine".
+//
+// ✅ IMAGE HANDLING CHANGED: images are now stored as URLs (https://i.ibb.co/…)
+// after being uploaded to ImgBB. We still use the `__IMG__` prefix so the
+// wire format stays compatible; the payload after the prefix is now a URL.
 function appendSupportBubble(container, msg, role) {
     if (!container) return;
     const isMine = role === 'user' ? msg.sender === 'user' : msg.sender === 'admin';
@@ -1260,18 +1244,18 @@ function appendSupportBubble(container, msg, role) {
 
     if (isImage) {
         bubble.classList.add('image-only');
-        const dataUrl = rawMessage.substring(7);
+        const imageSrc = rawMessage.substring(7);
         const img = document.createElement('img');
         img.className = 'support-image';
-        img.src = dataUrl;
+        img.src = imageSrc;
         img.alt = 'image';
         img.loading = 'lazy';
         img.addEventListener('click', (e) => {
             e.stopPropagation();
-            openImagePreview(dataUrl);
+            openImagePreview(imageSrc);
         });
-        
-        // ✅ FIX: Handle broken/truncated base64 images
+
+        // Simple network-error fallback – no more "too large/corrupted" wording
         img.onerror = () => {
             img.style.display = 'none';
             const fallback = document.createElement('div');
@@ -1279,10 +1263,10 @@ function appendSupportBubble(container, msg, role) {
             fallback.style.fontSize = '12px';
             fallback.style.color = '#ff5555';
             fallback.style.textAlign = 'center';
-            fallback.textContent = '❌ Image failed to load (too large or corrupted)';
+            fallback.textContent = '❌ Image failed to load';
             bubble.appendChild(fallback);
         };
-        
+
         bubble.appendChild(img);
     } else {
         const textEl = document.createElement('div');
@@ -1315,8 +1299,6 @@ function appendSupportBubble(container, msg, role) {
     row.appendChild(copyBtn);
     container.appendChild(row);
 
-    // Interactive links & numbers (event handlers are attached per node
-    // so no event delegation is needed on the container).
     if (!isImage) {
         bubble.querySelectorAll('.msg-link').forEach(el => {
             el.addEventListener('click', (e) => {
@@ -1398,31 +1380,17 @@ safeOn('imagePreviewModal', 'click', (e) => {
     }
 });
 
-// -------------------- IMAGE COMPRESSION + UPLOAD --------------------
-// Downscale + JPEG-compress so that even big photos land around a few
-// hundred KB of base64 in the DB. This keeps polling light.
-//
-// ✅ FIX 1: maxDim lowered 800 -> 600 and quality 0.72 -> 0.55. This keeps
-// the resulting base64 string well under backend payload limits
-// (Render / Vercel / FastAPI default body size), preventing 413 errors.
-//
-// ✅ FIX 2 (this change): Read the actual intrinsic dimensions from
-// `img.naturalWidth` / `img.naturalHeight` INSIDE the onload handler.
-// Previously the code destructured `{ width, height } = img`, which could
-// evaluate to 0 in some WebViews, causing `ctx.drawImage(img, 0, 0, 0, 0)`
-// to draw nothing while `ctx.fillRect` painted the entire canvas solid
-// white — hence the "plain white image" bug. Using naturalWidth/naturalHeight
-// (with a fallback to width/height) guarantees valid dimensions are always
-// used, so the drawn image actually lands on the canvas.
-function compressImage(file, maxDim = 600, quality = 0.55) {
+// -------------------- IMAGE COMPRESSION --------------------
+// We still compress before uploading so ImgBB uploads are fast & the
+// request body stays small.
+function compressImage(file, maxDim = 1600, quality = 0.85) {
     return new Promise((resolve) => {
         const reader = new FileReader();
-        
+
         reader.onload = (e) => {
             const img = new Image();
-            
+
             img.onload = () => {
-                // Ensure correct source dimensions are captured
                 let width = img.naturalWidth || img.width;
                 let height = img.naturalHeight || img.height;
 
@@ -1435,19 +1403,16 @@ function compressImage(file, maxDim = 600, quality = 0.55) {
                         height = maxDim;
                     }
                 }
-                
+
                 const canvas = document.createElement('canvas');
                 canvas.width = width;
                 canvas.height = height;
                 const ctx = canvas.getContext('2d');
 
-                // Fill background (for non-transparent JPEGs)
                 ctx.fillStyle = '#FFFFFF';
                 ctx.fillRect(0, 0, width, height);
-
-                // Draw resized image onto canvas
                 ctx.drawImage(img, 0, 0, width, height);
-                
+
                 try {
                     resolve(canvas.toDataURL('image/jpeg', quality));
                 } catch (err) {
@@ -1455,22 +1420,49 @@ function compressImage(file, maxDim = 600, quality = 0.55) {
                     resolve(null);
                 }
             };
-            
+
             img.onerror = (err) => {
                 console.error('Image load failed:', err);
                 resolve(null);
             };
-            
+
             img.src = e.target.result;
         };
-        
+
         reader.onerror = (err) => {
             console.error('FileReader failed:', err);
             resolve(null);
         };
-        
+
         reader.readAsDataURL(file);
     });
+}
+
+// -------------------- IMAGE UPLOAD TO IMGBB (via backend proxy) --------------------
+// The backend proxies the base64 payload to ImgBB and returns a hosted URL.
+// We do this via our own backend so the ImgBB API key never touches the client.
+async function uploadImageToServer(dataUrl) {
+    if (!dataUrl) return null;
+    try {
+        const resp = await fetch(`${BACKEND_URL}/api/support/upload-image`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image: dataUrl })
+        });
+        if (!resp.ok) {
+            console.error('Upload HTTP error:', resp.status);
+            return null;
+        }
+        const data = await resp.json();
+        if (data.status === 'success' && data.url) {
+            return data.url;
+        }
+        console.error('Upload error:', data.message);
+        return null;
+    } catch (e) {
+        console.error('Image upload exception:', e);
+        return null;
+    }
 }
 
 function setupImageUpload(clipBtnId, inputId, senderType) {
@@ -1492,27 +1484,35 @@ function setupImageUpload(clipBtnId, inputId, senderType) {
             showToast('Only image files are allowed.', 'error');
             return;
         }
-        // ✅ FIX 2: Pre-validation reduced from 3MB -> 2MB so the compressed
-        // base64 string never balloons past backend payload limits.
-        if (file.size > 2 * 1024 * 1024) {
-            showToast('Image must be under 2MB.', 'error');
+        // Allow larger originals now since we compress + offload to ImgBB.
+        if (file.size > 15 * 1024 * 1024) {
+            showToast('Image must be under 15MB.', 'error');
             return;
         }
 
+        showToast('Processing image…', 'info', 1500);
         const dataUrl = await compressImage(file);
         if (!dataUrl) {
             showToast('Failed to process image.', 'error');
             return;
         }
 
-        await sendImageMessage(dataUrl, senderType);
+        showToast('Uploading image…', 'info', 4000);
+        const imageUrl = await uploadImageToServer(dataUrl);
+        if (!imageUrl) {
+            showToast('Failed to upload image. Please try again.', 'error');
+            return;
+        }
+
+        await sendImageMessage(imageUrl, senderType);
     });
 }
 
-async function sendImageMessage(dataUrl, sender) {
-    if (!state.user) return;
+// Sends a message with `__IMG__<url>` as its payload.
+async function sendImageMessage(imageUrl, sender) {
+    if (!state.user || !imageUrl) return;
 
-    const message = `__IMG__${dataUrl}`;
+    const message = `__IMG__${imageUrl}`;
 
     if (sender === 'user') {
         if (!state.user.id) {
@@ -1542,15 +1542,12 @@ async function sendImageMessage(dataUrl, sender) {
                     photo_url: getMyAvatarUrl()
                 })
             });
-            // ✅ Surface a clearer error if the server rejected the payload
-            if (resp.status === 413) {
-                const opt = supportMessages?.querySelector(`[data-msg-id="${optimisticId}"]`);
-                if (opt) opt.remove();
-                showToast('Image too large. Please pick a smaller one.', 'error');
-                return;
-            }
             const opt = supportMessages?.querySelector(`[data-msg-id="${optimisticId}"]`);
             if (opt) opt.remove();
+            if (!resp.ok) {
+                showToast('Failed to send image.', 'error');
+                return;
+            }
             await loadSupportMessages();
             showToast('📷 Image sent', 'success', 1500);
         } catch (err) {
@@ -1581,14 +1578,12 @@ async function sendImageMessage(dataUrl, sender) {
                     admin_id: state.user.id
                 })
             });
-            if (resp.status === 413) {
-                const opt = adminChatMessages?.querySelector(`[data-msg-id="${optimisticId}"]`);
-                if (opt) opt.remove();
-                showToast('Image too large. Please pick a smaller one.', 'error');
-                return;
-            }
             const opt = adminChatMessages?.querySelector(`[data-msg-id="${optimisticId}"]`);
             if (opt) opt.remove();
+            if (!resp.ok) {
+                showToast('Failed to send image.', 'error');
+                return;
+            }
             await loadAdminChatMessages(state.activeSupportUser);
             showToast('📷 Image sent', 'success', 1500);
         } catch (err) {
@@ -1603,9 +1598,6 @@ setupImageUpload('supportClipBtn', 'supportImageInput', 'user');
 setupImageUpload('adminClipBtn', 'adminImageInput', 'admin');
 
 // -------------------- USER-SIDE UNREAD BADGE POLLING --------------------
-// NOTE: the poller handle lives on `state` (not a module-level `let`) so that
-// calling startUserUnreadPolling() during early init cannot hit a Temporal
-// Dead Zone ReferenceError, which is what crashed the Telegram mini-app.
 function updateSupportBadge(count) {
     const badge = document.getElementById('supportBadge');
     if (!badge) return;
@@ -1629,7 +1621,6 @@ async function pollUserUnread() {
     } catch {
         // fall through to the fallback
     }
-    // Fallback for deployments where the unread-count endpoint isn't available.
     try {
         const resp = await fetch(`${BACKEND_URL}/api/support/messages?telegram_id=${state.user.id}`);
         const data = await resp.json();
@@ -1640,7 +1631,6 @@ async function pollUserUnread() {
 
 function startUserUnreadPolling() {
     if (state.userUnreadPolling) clearInterval(state.userUnreadPolling);
-    // small delay so we don't race checkAdminStatus
     setTimeout(pollUserUnread, 1500);
     state.userUnreadPolling = setInterval(pollUserUnread, 20000);
 }
@@ -1678,6 +1668,12 @@ function openSupport() {
         if (supportChatView) supportChatView.style.display = 'flex';
         // Clear the badge immediately — we're about to mark them read
         updateSupportBadge(0);
+
+        // ✅ NEW: Force a full history load on every open so that
+        // the "first unread" divider shows up correctly every time.
+        chatCursor.user = 0;
+        if (supportMessages) supportMessages.innerHTML = '';
+
         loadSupportMessages();
         startSupportPolling();
     }
@@ -1728,31 +1724,72 @@ function startAdminChatPolling() {
     }, 5000);
 }
 
+// -------------------- UNREAD DIVIDER HELPERS --------------------
+// Insert a "New Messages" divider right above the first unread message
+// and smoothly scroll it into the middle of the viewport.
+function insertUnreadDivider(container, firstUnreadId) {
+    if (!container || !firstUnreadId) return false;
+    const target = container.querySelector(`[data-msg-id="${firstUnreadId}"]`);
+    if (!target || !target.parentNode) return false;
+
+    // Avoid double-inserting
+    if (container.querySelector('.unread-divider')) return false;
+
+    const divider = document.createElement('div');
+    divider.className = 'unread-divider';
+    divider.innerHTML = '<span>New Messages</span>';
+    target.parentNode.insertBefore(divider, target);
+
+    requestAnimationFrame(() => {
+        try {
+            target.scrollIntoView({ block: 'center', behavior: 'auto' });
+        } catch {
+            // older WebViews
+            const top = target.offsetTop - container.clientHeight / 2;
+            container.scrollTop = Math.max(0, top);
+        }
+    });
+    return true;
+}
+
 // -------------------- USER SIDE --------------------
 async function loadSupportMessages(silent = false) {
     if (!state.user || !state.user.id || !supportMessages) return;
+    const isFirstLoad = chatCursor.user === 0;
     try {
-        let url = `${BACKEND_URL}/api/support/messages?telegram_id=${state.user.id}`;
-        if (chatCursor.user > 0) url += `&since_id=${chatCursor.user}`;
+        const url = `${BACKEND_URL}/api/support/messages?telegram_id=${state.user.id}`;
         const resp = await fetch(url);
         const data = await resp.json();
         const msgs = data.messages || [];
 
+        // Detect the first unread admin message BEFORE we render (so we
+        // can draw a divider and scroll to it).
+        let firstUnreadId = null;
+        if (isFirstLoad && msgs.length > 0) {
+            const firstUnread = msgs.find(m => m.sender === 'admin' && !m.read_by_user);
+            if (firstUnread) firstUnreadId = firstUnread.id;
+        }
+
         if (msgs.length > 0) {
-            // Remove "empty state" placeholder if it exists
             const empty = supportMessages.querySelector('.support-empty');
             if (empty) empty.remove();
 
             const wasAtBottom = isScrolledToBottom(supportMessages);
+
             msgs.forEach(m => {
                 if (m.id > chatCursor.user) chatCursor.user = m.id;
                 appendSupportBubble(supportMessages, m, 'user');
             });
-            if (wasAtBottom || chatCursor.user === 0) {
+
+            // Scroll behavior: prefer unread divider, else bottom.
+            const dividerInserted = firstUnreadId
+                ? insertUnreadDivider(supportMessages, firstUnreadId)
+                : false;
+
+            if (!dividerInserted && (wasAtBottom || isFirstLoad)) {
                 supportMessages.scrollTop = supportMessages.scrollHeight;
             }
-        } else if (chatCursor.user === 0) {
-            // Very first load, no messages at all
+        } else if (isFirstLoad) {
             supportMessages.innerHTML = `
                 <div class="support-empty">
                     <div style="font-size:40px;">💬</div>
@@ -1761,13 +1798,13 @@ async function loadSupportMessages(silent = false) {
                 </div>`;
         }
 
-        // Mark admin messages as read for the user
+        // Mark admin messages as read for the user (after we've already
+        // captured the unread divider position)
         await fetch(`${BACKEND_URL}/api/support/mark-read`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ telegram_id: state.user.id, viewer: 'user' })
         });
-        // Refresh the badge to 0
         updateSupportBadge(0);
     } catch (e) {
         if (!silent) console.error('Load support messages error:', e);
@@ -1779,7 +1816,6 @@ async function sendSupportMessage() {
     if (!text || !state.user) return;
     if (supportInput) supportInput.value = '';
 
-    // Optimistic render
     const optimisticId = 'opt-' + Date.now();
     appendSupportBubble(supportMessages, {
         id: optimisticId,
@@ -1800,8 +1836,6 @@ async function sendSupportMessage() {
                 sender: 'user',
                 first_name: state.user.first_name || '',
                 username: state.user.username || '',
-                // Send the client-generated avatar fallback so admins always
-                // see something recognisable, even when Telegram omits photo_url.
                 photo_url: getMyAvatarUrl()
             })
         });
@@ -1841,7 +1875,6 @@ async function loadSupportConversations() {
 function renderSupportConversations(convos) {
     if (!supportConversations) return;
 
-    // Skip re-render if nothing changed (prevents flicker)
     const payload = JSON.stringify(convos.map(c => [
         c.telegram_id, c.first_name, c.photo_url, c.last_message,
         c.last_message_at, c.last_sender, c.unread_count
@@ -1856,8 +1889,6 @@ function renderSupportConversations(convos) {
 
     supportConversations.innerHTML = convos.map(c => {
         const preview = (c.last_message || '').slice(0, 60);
-        // Use the user's real photo if we have one, otherwise draw initials
-        // client-side (no external request, no flicker).
         const avatarSrc = c.photo_url || buildInitialsAvatar(c.first_name || 'User');
         const unreadHtml = c.unread_count > 0 ? `<span class="support-unread">${c.unread_count}</span>` : '';
         const senderPrefix = c.last_sender === 'admin' ? '<span style="opacity:0.5">You: </span>' : '';
@@ -1894,11 +1925,10 @@ async function openAdminChat(telegramId, convo) {
     if (adminChatView) adminChatView.style.display = 'flex';
     if (adminChatName) adminChatName.textContent = convo?.first_name || 'User';
 
-    // Same fallback: initials if no photo
     const avatarSrc = convo?.photo_url || buildInitialsAvatar(convo?.first_name || 'User');
     if (adminChatAvatar) adminChatAvatar.src = avatarSrc;
 
-    // Full reload for this user: reset container and cursor
+    // Reset container + cursor so we can render the unread divider correctly
     if (adminChatMessages) adminChatMessages.innerHTML = '';
     chatCursor.admin[telegramId] = 0;
 
@@ -1916,14 +1946,21 @@ async function loadAdminChatMessages(telegramId, silent = false) {
     if (!adminChatMessages) return;
     try {
         const cursor = chatCursor.admin[telegramId] || 0;
+        const isFirstLoad = cursor === 0;
         let url = `${BACKEND_URL}/api/support/messages?telegram_id=${telegramId}`;
         if (cursor > 0) url += `&since_id=${cursor}`;
         const resp = await fetch(url);
         const data = await resp.json();
         const msgs = data.messages || [];
 
-        // If the admin navigated away mid-fetch, ignore the result
         if (state.activeSupportUser !== telegramId) return;
+
+        // Find first unread user message (before rendering)
+        let firstUnreadId = null;
+        if (isFirstLoad && msgs.length > 0) {
+            const firstUnread = msgs.find(m => m.sender === 'user' && !m.read_by_admin);
+            if (firstUnread) firstUnreadId = firstUnread.id;
+        }
 
         if (msgs.length > 0) {
             const wasAtBottom = isScrolledToBottom(adminChatMessages);
@@ -1933,7 +1970,12 @@ async function loadAdminChatMessages(telegramId, silent = false) {
                 }
                 appendSupportBubble(adminChatMessages, m, 'admin');
             });
-            if (wasAtBottom || cursor === 0) {
+
+            const dividerInserted = firstUnreadId
+                ? insertUnreadDivider(adminChatMessages, firstUnreadId)
+                : false;
+
+            if (!dividerInserted && (wasAtBottom || isFirstLoad)) {
                 adminChatMessages.scrollTop = adminChatMessages.scrollHeight;
             }
         }
@@ -1996,7 +2038,6 @@ if (backToSupportList) {
         state.activeSupportUserInfo = null;
         if (adminChatView) adminChatView.style.display = 'none';
         if (supportListView) supportListView.style.display = 'flex';
-        // Force list refresh since state may have changed
         lastRendered.conversations = '';
         loadSupportConversations();
         startAdminListPolling();
