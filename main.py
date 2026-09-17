@@ -25,7 +25,7 @@ CPAGRIP_FEED_URL = os.getenv(
     "CPAGRIP_FEED_URL",
     "https://www.cpagrip.com/common/offer_feed_json.php?user_id=YOUR_ID&pubkey=YOUR_KEY"
 )
-# NEW: ImgBB API key for image uploads (support chat images now live on ImgBB)
+# ImgBB API key for image uploads (support chat images now live on ImgBB)
 IMGBB_API_KEY = os.getenv("IMGBB_API_KEY")
 
 # Module-level admin list (used by both support endpoints and bot)
@@ -49,16 +49,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---- Base directory (folder that contains main.py, index.html, app.js, style.css) ----
+# ---- Base directory ----
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# ---- Mount static folders (common) ----
+# ---- Mount static folders ----
 if os.path.exists("ads"):
     app.mount("/ads", StaticFiles(directory="ads"), name="ads")
 else:
     logger.warning("ads folder not found – local images won't be served")
 
-# ---- Public API endpoints (run on both Vercel and Render) ----
+# ---- Public API endpoints ----
 
 @app.get("/health")
 async def health():
@@ -92,10 +92,8 @@ async def get_games(
     except Exception as e:
         return {"error": str(e)}, 500
 
-# NEW: Fetch a single game by ID
 @app.get("/game/{game_id}")
 async def get_game_by_id(game_id: str):
-    """Fetch a single game by its ID."""
     try:
         result = supabase.table("games").select("*").eq("id", game_id).execute()
         if not result.data:
@@ -192,46 +190,129 @@ async def add_recent_game(request: Request):
 # =============================================================================
 #  SUPPORT CHAT ENDPOINTS
 # =============================================================================
+
+# Tracks when cleanup last ran, so we only run it once per hour even if many
+# requests hit the user-messages endpoint.
+_last_cleanup_at = None
+_cleanup_lock = threading.Lock()
+_CLEANUP_INTERVAL_SECONDS = 3600
+
+
+def _fire_imgbb_delete(delete_url: str):
+    """Fire-and-forget deletion of an ImgBB image via its delete URL.
+    Runs in a daemon thread so cleanup isn't blocked by network I/O."""
+    if not delete_url:
+        return
+
+    def _worker():
+        try:
+            r = requests.get(delete_url, timeout=10, allow_redirects=True)
+            logger.info(f"ImgBB delete attempted ({r.status_code}): {delete_url}")
+        except Exception as e:
+            logger.warning(f"ImgBB delete failed for {delete_url}: {e}")
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
 def cleanup_old_support_conversations():
-    """Delete all messages for conversations whose latest message is older than 7 days."""
+    """Delete all messages for conversations whose latest message is older
+    than 7 days, and also request deletion of any ImgBB images they contain."""
     try:
         cutoff = (datetime.utcnow() - timedelta(days=7)).isoformat()
-        msgs = (
-            supabase.table("support_messages")
-            .select("telegram_id, created_at")
-            .order("created_at", desc=True)
-            .execute()
-        )
+
+        # NOTE: 'image_delete_url' column must exist (see migration SQL).
+        try:
+            msgs = (
+                supabase.table("support_messages")
+                .select("telegram_id, created_at, message, image_delete_url")
+                .order("created_at", desc=True)
+                .execute()
+            )
+        except Exception as col_err:
+            # Fallback if the new column hasn't been added yet — still cleans Supabase.
+            logger.warning(
+                f"Falling back to legacy cleanup (image_delete_url column missing?): {col_err}"
+            )
+            msgs = (
+                supabase.table("support_messages")
+                .select("telegram_id, created_at, message")
+                .order("created_at", desc=True)
+                .execute()
+            )
+
+        data = msgs.data or []
+
+        # Find conversations whose latest message is older than the cutoff.
         seen = set()
-        to_delete = []
-        for m in (msgs.data or []):
+        to_delete = set()
+        for m in data:
             tid = m["telegram_id"]
             if tid in seen:
                 continue
             seen.add(tid)
             if (m.get("created_at") or "") < cutoff:
-                to_delete.append(tid)
-        if to_delete:
-            supabase.table("support_messages").delete().in_("telegram_id", to_delete).execute()
-            logger.info(f"Cleaned up {len(to_delete)} inactive support conversations.")
+                to_delete.add(tid)
+
+        if not to_delete:
+            return
+
+        # Collect ImgBB delete URLs for the messages we're about to purge.
+        img_delete_urls = []
+        for m in data:
+            if m["telegram_id"] in to_delete:
+                du = m.get("image_delete_url")
+                if du:
+                    img_delete_urls.append(du)
+
+        # Fire-and-forget ImgBB deletions (won't block the response).
+        for du in img_delete_urls:
+            _fire_imgbb_delete(du)
+
+        # Purge from Supabase.
+        supabase.table("support_messages").delete().in_(
+            "telegram_id", list(to_delete)
+        ).execute()
+
+        logger.info(
+            f"Cleaned up {len(to_delete)} inactive support conversations "
+            f"({len(img_delete_urls)} ImgBB images queued for deletion)."
+        )
     except Exception as e:
         logger.error(f"Support cleanup error: {e}")
+
+
+def _maybe_cleanup_old_conversations():
+    """Throttled cleanup — runs at most once per hour. Called from user-facing
+    endpoints so we don't rely solely on admin activity to trigger it."""
+    global _last_cleanup_at
+    now = datetime.utcnow()
+    if _last_cleanup_at and (now - _last_cleanup_at).total_seconds() < _CLEANUP_INTERVAL_SECONDS:
+        return
+    with _cleanup_lock:
+        if _last_cleanup_at and (now - _last_cleanup_at).total_seconds() < _CLEANUP_INTERVAL_SECONDS:
+            return
+        _last_cleanup_at = now
+    try:
+        cleanup_old_support_conversations()
+    except Exception as e:
+        logger.error(f"Background cleanup error: {e}")
+
 
 @app.get("/api/support/is-admin")
 async def support_is_admin(telegram_id: int):
     return {"is_admin": telegram_id in ADMIN_IDS}
 
+
 # =============================================================================
-#  IMAGE UPLOAD PROXY (ImgBB)  – replaces the old base64-in-DB approach
+#  IMAGE UPLOAD PROXY (ImgBB)
 # =============================================================================
 @app.post("/api/support/upload-image")
 async def support_upload_image(request: Request):
     """
     Accepts JSON: { "image": "<base64 or data-url>" } and proxies it to ImgBB.
-    Returns: { "status": "success", "url": "https://i.ibb.co/..." }
-
-    The frontend then sends that URL as a normal support message with the
-    `__IMG__` prefix, so nothing else in the pipeline needs to change.
+    Returns: { "status": "success", "url": "...", "delete_url": "..." }
+    The frontend then sends the URL as a normal support message with the
+    `__IMG__` prefix, and stores the delete_url so we can purge it later.
     """
     if not IMGBB_API_KEY:
         logger.error("IMGBB_API_KEY is not set on the server.")
@@ -247,15 +328,15 @@ async def support_upload_image(request: Request):
     if not image_data:
         return {"status": "error", "message": "Missing image data."}, 400
 
-    # Strip `data:image/...;base64,` prefix if the client sent one
+    # Strip `data:image/...;base64,` prefix if the client sent one.
     if image_data.startswith("data:"):
         try:
             image_data = image_data.split(",", 1)[1]
         except Exception:
             return {"status": "error", "message": "Malformed data URL."}, 400
 
-    # Soft size check on the base64 string (~5 MB decoded)
-    if len(image_data) > 7_000_000:
+    # Soft size check on the base64 string (~7 MB decoded).
+    if len(image_data) > 9_500_000:
         return {"status": "error", "message": "Image is too large."}, 413
 
     try:
@@ -276,9 +357,14 @@ async def support_upload_image(request: Request):
                 or payload.get("url")
                 or (payload.get("thumb") or {}).get("url")
             )
+            delete_url = payload.get("delete_url") or ""
             if url:
                 logger.info(f"ImgBB upload OK: {url}")
-                return {"status": "success", "url": url}
+                return {
+                    "status": "success",
+                    "url": url,
+                    "delete_url": delete_url,
+                }
 
         logger.error(f"ImgBB upload failed: status={resp.status_code} body={str(result)[:300]}")
         return {"status": "error", "message": "ImgBB upload failed."}, 502
@@ -286,10 +372,9 @@ async def support_upload_image(request: Request):
         logger.error(f"ImgBB proxy error: {e}")
         return {"status": "error", "message": str(e)}, 500
 
+
 @app.post("/api/support/send")
 async def support_send(request: Request):
-    # Parse body in its own try/except: oversized JSON payloads can make
-    # Starlette/Uvicorn raise during request.json(); we return a proper 413.
     try:
         data = await request.json()
     except Exception as parse_err:
@@ -306,6 +391,7 @@ async def support_send(request: Request):
     username = data.get("username") or ""
     photo_url = data.get("photo_url") or ""
     admin_id = data.get("admin_id")
+    image_delete_url = data.get("image_delete_url") or None
 
     if not telegram_id or not message:
         return {"status": "error", "message": "Missing parameters"}
@@ -314,7 +400,6 @@ async def support_send(request: Request):
         return {"status": "error", "message": "Unauthorized"}
 
     try:
-        # Check last message BEFORE inserting (for auto-reply logic)
         should_auto_reply = False
         if sender == "user":
             last_msgs = (
@@ -328,8 +413,9 @@ async def support_send(request: Request):
             if not last_msgs.data or not last_msgs.data[0].get("is_auto_reply"):
                 should_auto_reply = True
 
-        # Insert the user/admin message (preserve whatever info was passed)
-        supabase.table("support_messages").insert({
+        # Insert with image_delete_url. If the column doesn't exist, we catch
+        # the error and retry without it so the message is still delivered.
+        row = {
             "telegram_id": telegram_id,
             "sender": sender,
             "message": message,
@@ -338,10 +424,16 @@ async def support_send(request: Request):
             "photo_url": photo_url,
             "read_by_admin": (sender == "admin"),
             "read_by_user": (sender == "user"),
-            "is_auto_reply": False
-        }).execute()
+            "is_auto_reply": False,
+            "image_delete_url": image_delete_url,
+        }
+        try:
+            supabase.table("support_messages").insert(row).execute()
+        except Exception as insert_err:
+            logger.warning(f"Insert with image_delete_url failed, retrying without: {insert_err}")
+            row.pop("image_delete_url", None)
+            supabase.table("support_messages").insert(row).execute()
 
-        # Send the auto-reply if this is a fresh user batch.
         if should_auto_reply:
             supabase.table("support_messages").insert({
                 "telegram_id": telegram_id,
@@ -360,8 +452,13 @@ async def support_send(request: Request):
         logger.error(f"Support send error: {e}")
         return {"status": "error", "message": str(e)}
 
+
 @app.get("/api/support/messages")
 async def support_messages(telegram_id: int, since_id: Optional[int] = None):
+    # Kick off the throttled cleanup in the background so user-facing requests
+    # stay fast and cleanup happens regularly even without admin activity.
+    threading.Thread(target=_maybe_cleanup_old_conversations, daemon=True).start()
+
     try:
         query = (
             supabase.table("support_messages")
@@ -377,9 +474,9 @@ async def support_messages(telegram_id: int, since_id: Optional[int] = None):
         logger.error(f"Support messages error: {e}")
         return {"status": "error", "messages": []}
 
+
 @app.get("/api/support/unread-count")
 async def support_unread_count(telegram_id: int):
-    """Lightweight count of admin messages the given user hasn't read yet."""
     try:
         result = (
             supabase.table("support_messages")
@@ -393,6 +490,7 @@ async def support_unread_count(telegram_id: int):
     except Exception as e:
         logger.error(f"Unread count error: {e}")
         return {"count": 0}
+
 
 @app.get("/api/support/conversations")
 async def support_conversations(admin_id: int):
@@ -452,12 +550,13 @@ async def support_conversations(admin_id: int):
         logger.error(f"Support conversations error: {e}")
         return {"status": "error", "conversations": []}
 
+
 @app.post("/api/support/mark-read")
 async def support_mark_read(request: Request):
     try:
         data = await request.json()
         telegram_id = data.get("telegram_id")
-        viewer = data.get("viewer")  # 'admin' or 'user'
+        viewer = data.get("viewer")
         if not telegram_id or viewer not in ("admin", "user"):
             return {"status": "error", "message": "Missing parameters"}
         field = "read_by_admin" if viewer == "admin" else "read_by_user"
@@ -468,6 +567,7 @@ async def support_mark_read(request: Request):
     except Exception as e:
         logger.error(f"Support mark-read error: {e}")
         return {"status": "error", "message": str(e)}
+
 
 # ---- Helper for CPA image extraction ----
 def extract_adaptive_image(offer: dict) -> str:
@@ -488,6 +588,7 @@ def extract_adaptive_image(offer: dict) -> str:
             if any(val_lower.endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".gif", ".webp"]):
                 return v
     return ""
+
 
 def load_native_ads():
     NATIVE_ADS_FILE = os.path.join(os.path.dirname(__file__), "native_ads.json")
@@ -529,6 +630,7 @@ def load_native_ads():
             "description": ""
         }
     ]
+
 
 @app.get("/api/cpa-offers")
 async def get_cpa_offers(request: Request):
@@ -609,6 +711,7 @@ async def get_cpa_offers(request: Request):
                     img = img[1:]
                 ad["image"] = f"{base_url}/{img}"
         return {"success": True, "ads": native_ads}
+
 
 # =============================================================================
 #  BOT & WEBHOOK
