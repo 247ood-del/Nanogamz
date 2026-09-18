@@ -1726,7 +1726,14 @@ function startAdminChatPolling() {
 
 // -------------------- UNREAD DIVIDER HELPERS --------------------
 // Insert a "New Messages" divider right above the first unread message and
-// smoothly scroll it into the middle of the viewport.
+// scroll it into the middle of the viewport.
+//
+// NOTE: we deliberately avoid `scrollIntoView` here. Inside Telegram's
+// WebView (and with `body { overflow: hidden }` + `.support-messages` as
+// the actual scroller) `scrollIntoView` frequently no-ops or scrolls the
+// wrong ancestor, which is why the chat appeared to open at an arbitrary
+// position. Instead we measure with getBoundingClientRect() and set
+// `container.scrollTop` directly — deterministic on every WebView.
 function insertUnreadDivider(container, firstUnreadId) {
     if (!container || !firstUnreadId) return false;
     const target = container.querySelector(`[data-msg-id="${firstUnreadId}"]`);
@@ -1739,15 +1746,42 @@ function insertUnreadDivider(container, firstUnreadId) {
     divider.innerHTML = '<span>New Messages</span>';
     target.parentNode.insertBefore(divider, target);
 
+    // Wait two frames so every appended bubble has finished layout
+    // before we measure. Then center the row manually.
     requestAnimationFrame(() => {
-        try {
-            target.scrollIntoView({ block: 'center', behavior: 'auto' });
-        } catch {
-            const top = target.offsetTop - container.clientHeight / 2;
-            container.scrollTop = Math.max(0, top);
-        }
+        requestAnimationFrame(() => {
+            scrollRowIntoCenter(target, container);
+        });
     });
     return true;
+}
+
+// Scroll `row` into the vertical middle of `container`.
+// Uses getBoundingClientRect + scrollTop instead of scrollIntoView,
+// because scrollIntoView is unreliable inside Telegram's WebView when
+// the document body itself is not the scroll container.
+function scrollRowIntoCenter(row, container) {
+    if (!row || !container) return;
+    void container.offsetHeight; // force reflow so measurements are fresh
+
+    const containerRect = container.getBoundingClientRect();
+    const rowRect = row.getBoundingClientRect();
+
+    // Row's top, expressed in the container's scroll coordinate space.
+    const rowTopInContent = (rowRect.top - containerRect.top) + container.scrollTop;
+    const desired = rowTopInContent - (container.clientHeight / 2) + (rowRect.height / 2);
+
+    container.scrollTop = Math.max(0, desired);
+}
+
+// Reliable "pin to bottom" — also waits for layout.
+function scrollContainerToBottom(container) {
+    if (!container) return;
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            container.scrollTop = container.scrollHeight;
+        });
+    });
 }
 
 // -------------------- USER SIDE --------------------
@@ -1794,8 +1828,11 @@ async function loadSupportMessages(silent = false) {
                 ? insertUnreadDivider(supportMessages, firstUnreadId)
                 : false;
 
+            // If a divider was inserted, insertUnreadDivider already scrolled
+            // to the first unread. Otherwise pin to the bottom on first open
+            // (or when the user was already at the bottom).
             if (!dividerInserted && (wasAtBottom || isFirstLoad)) {
-                supportMessages.scrollTop = supportMessages.scrollHeight;
+                scrollContainerToBottom(supportMessages);
             }
         } else if (isFirstLoad) {
             supportMessages.innerHTML = `
@@ -1981,8 +2018,11 @@ async function loadAdminChatMessages(telegramId, silent = false) {
                 ? insertUnreadDivider(adminChatMessages, firstUnreadId)
                 : false;
 
+            // If a divider was inserted, insertUnreadDivider already scrolled
+            // to the first unread. Otherwise pin to the bottom on first open
+            // (or when the admin was already at the bottom).
             if (!dividerInserted && (wasAtBottom || isFirstLoad)) {
-                adminChatMessages.scrollTop = adminChatMessages.scrollHeight;
+                scrollContainerToBottom(adminChatMessages);
             }
         }
     } catch (e) {
