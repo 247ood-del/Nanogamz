@@ -1149,6 +1149,19 @@ const chatCursor = {
     admin: {}  // telegram_id -> last seen message id
 };
 
+// NEW: how many messages to fetch per page (initial load + each "load older"
+// request). Smaller pages = snappier open time; larger pages = fewer round
+// trips when scrolling up. 30 is a good balance.
+const CHAT_PAGE_SIZE = 30;
+
+// NEW: per-conversation pagination state. `hasMore` is whether the backend
+// signalled there are still older messages beyond what we've loaded.
+// `loadingOlder` prevents duplicate concurrent "load older" requests.
+const chatPaging = {
+    user: { hasMore: true, loadingOlder: false },
+    admin: {}  // telegram_id -> { hasMore, loadingOlder }
+};
+
 function isScrolledToBottom(el) {
     return el.scrollHeight - el.scrollTop - el.clientHeight < 80;
 }
@@ -1222,13 +1235,16 @@ async function copyToClipboard(text) {
     }
 }
 
-// Append a single bubble (text or image) with its copy button.
+// Build a single bubble row (text or image) with its copy button.
 // `role` is 'user' or 'admin' — determines which sender means "mine".
 //
 // IMAGE HANDLING: images are stored as URLs (https://i.ibb.co/…) after being
 // uploaded to ImgBB. We still use the `__IMG__` prefix for compatibility.
-function appendSupportBubble(container, msg, role) {
-    if (!container) return;
+//
+// This is the "pure" builder — it does NOT append to any container. Callers
+// either append (appendSupportBubble) or prepend (loadOlderSupportMessages /
+// loadOlderAdminChatMessages) the returned element.
+function buildSupportBubbleRow(msg, role) {
     const isMine = role === 'user' ? msg.sender === 'user' : msg.sender === 'admin';
 
     const row = document.createElement('div');
@@ -1296,7 +1312,6 @@ function appendSupportBubble(container, msg, role) {
 
     row.appendChild(bubble);
     row.appendChild(copyBtn);
-    container.appendChild(row);
 
     if (!isImage) {
         bubble.querySelectorAll('.msg-link').forEach(el => {
@@ -1314,6 +1329,14 @@ function appendSupportBubble(container, msg, role) {
             });
         });
     }
+
+    return row;
+}
+
+// Append a single bubble to `container` (thin wrapper for the common case).
+function appendSupportBubble(container, msg, role) {
+    if (!container) return;
+    container.appendChild(buildSupportBubbleRow(msg, role));
 }
 
 // -------------------- LINK OPTIONS MODAL --------------------
@@ -1671,7 +1694,9 @@ function openSupport() {
 
         // Force a full history load on every open so the "first unread"
         // divider is correctly placed and the scroll position is fresh.
+        // Also reset pagination state for a fresh session.
         chatCursor.user = 0;
+        chatPaging.user = { hasMore: true, loadingOlder: false };
         if (supportMessages) supportMessages.innerHTML = '';
 
         loadSupportMessages();
@@ -1725,8 +1750,7 @@ function startAdminChatPolling() {
 }
 
 // ============================================================================
-//  SCROLL HELPERS  (REWRITTEN — this is the fix for the "opens at the wrong
-//  message" bug)
+//  SCROLL HELPERS
 // ============================================================================
 //
 // The previous implementation scheduled a single double-rAF and set
@@ -1847,9 +1871,13 @@ function insertUnreadDivider(container, firstUnreadId) {
 // FIXED: previously this fetched ALL messages on every poll and re-appended
 // them all, which duplicated the chat history every 5 seconds and made the
 // scroll appear to "loop" (last message → first message and vice versa).
-// Now we mirror the admin logic: after the first load, we only request
-// messages with id > chatCursor.user using &since_id=. A guard also prevents
-// concurrent loads from double-appending.
+//
+// NEW: initial load now requests only the LATEST `CHAT_PAGE_SIZE` messages
+// (newest-last / chronological). Older history is fetched lazily by
+// `loadOlderSupportMessages()` when the user scrolls near the top, and
+// prepended above the existing rows. Native scroll anchoring (see style.css)
+// keeps the currently-visible message pinned while those prepended rows —
+// including any images inside them — finish loading.
 async function loadSupportMessages(silent = false) {
     if (!state.user || !state.user.id || !supportMessages) return;
     if (state.loadingUserMessages) return;
@@ -1858,13 +1886,20 @@ async function loadSupportMessages(silent = false) {
     const isFirstLoad = chatCursor.user === 0;
     try {
         let url = `${BACKEND_URL}/api/support/messages?telegram_id=${state.user.id}`;
-        if (!isFirstLoad) {
+        if (isFirstLoad) {
+            url += `&limit=${CHAT_PAGE_SIZE}`;
+        } else {
             url += `&since_id=${chatCursor.user}`;
         }
 
         const resp = await fetch(url);
         const data = await resp.json();
         const msgs = data.messages || [];
+
+        if (isFirstLoad) {
+            chatPaging.user.hasMore = !!data.has_more;
+            chatPaging.user.loadingOlder = false;
+        }
 
         let firstUnreadId = null;
         if (isFirstLoad && msgs.length > 0) {
@@ -1912,6 +1947,42 @@ async function loadSupportMessages(silent = false) {
         if (!silent) console.error('Load support messages error:', e);
     } finally {
         state.loadingUserMessages = false;
+    }
+}
+
+// NEW: fetch the previous page of messages (older than the current oldest
+// rendered row) and prepend them. Native scroll anchoring keeps the user's
+// current view stable — we don't touch scrollTop here on purpose, because
+// doing so would fight the browser's own anchor adjustment.
+async function loadOlderSupportMessages() {
+    if (!state.user || !state.user.id || !supportMessages) return;
+    if (chatPaging.user.loadingOlder || !chatPaging.user.hasMore) return;
+
+    const firstRow = supportMessages.querySelector('.support-msg-row');
+    if (!firstRow) return;
+    const oldestId = firstRow.dataset.msgId;
+    if (!oldestId) return;
+
+    chatPaging.user.loadingOlder = true;
+    try {
+        const url = `${BACKEND_URL}/api/support/messages?telegram_id=${state.user.id}&before_id=${oldestId}&limit=${CHAT_PAGE_SIZE}`;
+        const resp = await fetch(url);
+        const data = await resp.json();
+        const msgs = data.messages || [];
+
+        if (msgs.length === 0) {
+            chatPaging.user.hasMore = false;
+            return;
+        }
+        chatPaging.user.hasMore = !!data.has_more;
+
+        const fragment = document.createDocumentFragment();
+        msgs.forEach(m => fragment.appendChild(buildSupportBubbleRow(m, 'user')));
+        supportMessages.insertBefore(fragment, supportMessages.firstChild);
+    } catch (e) {
+        console.error('Load older support messages error:', e);
+    } finally {
+        chatPaging.user.loadingOlder = false;
     }
 }
 
@@ -1963,6 +2034,17 @@ if (supportInput) {
     });
 }
 if (closeSupportChat) closeSupportChat.addEventListener('click', closeSupport);
+
+// Trigger "load older" when the user scrolls near the top of the user chat.
+// The `hasMore` / `loadingOlder` guards inside loadOlderSupportMessages
+// deduplicate repeated events.
+if (supportMessages) {
+    supportMessages.addEventListener('scroll', () => {
+        if (supportMessages.scrollTop < 80) {
+            loadOlderSupportMessages();
+        }
+    }, { passive: true });
+}
 
 // -------------------- ADMIN SIDE --------------------
 async function loadSupportConversations() {
@@ -2034,6 +2116,7 @@ async function openAdminChat(telegramId, convo) {
 
     if (adminChatMessages) adminChatMessages.innerHTML = '';
     chatCursor.admin[telegramId] = 0;
+    chatPaging.admin[telegramId] = { hasMore: true, loadingOlder: false };
 
     await loadAdminChatMessages(telegramId);
     await fetch(`${BACKEND_URL}/api/support/mark-read`, {
@@ -2051,12 +2134,24 @@ async function loadAdminChatMessages(telegramId, silent = false) {
         const cursor = chatCursor.admin[telegramId] || 0;
         const isFirstLoad = cursor === 0;
         let url = `${BACKEND_URL}/api/support/messages?telegram_id=${telegramId}`;
-        if (cursor > 0) url += `&since_id=${cursor}`;
+        if (isFirstLoad) {
+            url += `&limit=${CHAT_PAGE_SIZE}`;
+        } else {
+            url += `&since_id=${cursor}`;
+        }
         const resp = await fetch(url);
         const data = await resp.json();
         const msgs = data.messages || [];
 
         if (state.activeSupportUser !== telegramId) return;
+
+        if (isFirstLoad) {
+            if (!chatPaging.admin[telegramId]) {
+                chatPaging.admin[telegramId] = { hasMore: true, loadingOlder: false };
+            }
+            chatPaging.admin[telegramId].hasMore = !!data.has_more;
+            chatPaging.admin[telegramId].loadingOlder = false;
+        }
 
         let firstUnreadId = null;
         if (isFirstLoad && msgs.length > 0) {
@@ -2086,6 +2181,45 @@ async function loadAdminChatMessages(telegramId, silent = false) {
         }
     } catch (e) {
         if (!silent) console.error('Load admin chat error:', e);
+    }
+}
+
+// NEW: admin-side "load older" — mirrors the user-side routine. Prepends a
+// page of messages older than the current oldest row and relies on native
+// scroll anchoring to hold the admin's current view.
+async function loadOlderAdminChatMessages(telegramId) {
+    if (!adminChatMessages) return;
+    if (state.activeSupportUser !== telegramId) return;
+    const paging = chatPaging.admin[telegramId];
+    if (!paging || paging.loadingOlder || !paging.hasMore) return;
+
+    const firstRow = adminChatMessages.querySelector('.support-msg-row');
+    if (!firstRow) return;
+    const oldestId = firstRow.dataset.msgId;
+    if (!oldestId) return;
+
+    paging.loadingOlder = true;
+    try {
+        const url = `${BACKEND_URL}/api/support/messages?telegram_id=${telegramId}&before_id=${oldestId}&limit=${CHAT_PAGE_SIZE}`;
+        const resp = await fetch(url);
+        const data = await resp.json();
+        const msgs = data.messages || [];
+
+        if (state.activeSupportUser !== telegramId) return;
+
+        if (msgs.length === 0) {
+            paging.hasMore = false;
+            return;
+        }
+        paging.hasMore = !!data.has_more;
+
+        const fragment = document.createDocumentFragment();
+        msgs.forEach(m => fragment.appendChild(buildSupportBubbleRow(m, 'admin')));
+        adminChatMessages.insertBefore(fragment, adminChatMessages.firstChild);
+    } catch (e) {
+        console.error('Load older admin messages error:', e);
+    } finally {
+        paging.loadingOlder = false;
     }
 }
 
@@ -2135,6 +2269,15 @@ if (adminChatInput) {
     });
 }
 if (closeSupportList) closeSupportList.addEventListener('click', closeSupport);
+
+// Trigger "load older" when the admin scrolls near the top of the active chat.
+if (adminChatMessages) {
+    adminChatMessages.addEventListener('scroll', () => {
+        if (adminChatMessages.scrollTop < 80 && state.activeSupportUser) {
+            loadOlderAdminChatMessages(state.activeSupportUser);
+        }
+    }, { passive: true });
+}
 
 if (backToSupportList) {
     backToSupportList.addEventListener('click', () => {
