@@ -860,10 +860,16 @@ body.search-open .game-grid {
     flex-direction: column;
     gap: 8px;
     -webkit-overflow-scrolling: touch;
-    /* NEW: stop scroll-chaining & scroll-anchor weirdness that caused the
-       "scrolling past the last message shows the first message" bug. */
+    /* NEW: stop scroll-chaining to the page behind this container. */
     overscroll-behavior: contain;
-    overflow-anchor: none;
+    /* CHANGED (was `none`): we now WANT the browser's native scroll
+       anchoring. When a page of older messages is prepended — or when a
+       lazy-loaded <img> inside a message finally downloads and grows the
+       content above the viewport — the browser will keep the user's current
+       anchor element visually pinned. That's exactly the behaviour we need
+       so the "first unread" divider or the last message never slides out of
+       view while images are still loading. */
+    overflow-anchor: auto;
     /* Solid background so no content from behind bleeds through. */
     background: var(--bg);
     /* Ensure children are laid out at the top when content is short. */
