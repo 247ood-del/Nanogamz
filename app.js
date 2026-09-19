@@ -1724,36 +1724,77 @@ function startAdminChatPolling() {
     }, 5000);
 }
 
-// -------------------- UNREAD DIVIDER HELPERS --------------------
-// Insert a "New Messages" divider right above the first unread message and
-// scroll it into the middle of the viewport.
+// ============================================================================
+//  SCROLL HELPERS  (REWRITTEN — this is the fix for the "opens at the wrong
+//  message" bug)
+// ============================================================================
 //
-// NOTE: we deliberately avoid `scrollIntoView` here. Inside Telegram's
-// WebView (and with `body { overflow: hidden }` + `.support-messages` as
-// the actual scroller) `scrollIntoView` frequently no-ops or scrolls the
-// wrong ancestor, which is why the chat appeared to open at an arbitrary
-// position. Instead we measure with getBoundingClientRect() and set
-// `container.scrollTop` directly — deterministic on every WebView.
-function insertUnreadDivider(container, firstUnreadId) {
-    if (!container || !firstUnreadId) return false;
-    const target = container.querySelector(`[data-msg-id="${firstUnreadId}"]`);
-    if (!target || !target.parentNode) return false;
+// The previous implementation scheduled a single double-rAF and set
+// `scrollTop` once. That is not reliable inside Telegram's WebView because:
+//   • Layout may not be finished when the rAF fires (esp. on slow devices).
+//   • Any `<img>` inside the chat has zero intrinsic height until it loads,
+//     so the content *below* it shifts *after* we've already scrolled.
+//   • Both effects caused the chat to land on a stale coordinate, which the
+//     user perceived as "it doesn't open on the first unread / last read
+//     message".
+//
+// The new approach: apply the scroll target multiple times across the
+// layout-settle window (immediately after layout, and again once images
+// have loaded), and bail out if the user manually scrolls in between.
 
-    if (container.querySelector('.unread-divider')) return false;
-
-    const divider = document.createElement('div');
-    divider.className = 'unread-divider';
-    divider.innerHTML = '<span>New Messages</span>';
-    target.parentNode.insertBefore(divider, target);
-
-    // Wait two frames so every appended bubble has finished layout
-    // before we measure. Then center the row manually.
-    requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-            scrollRowIntoCenter(target, container);
-        });
+// Wait for `n` animation frames to elapse. Ensures the browser has had a
+// chance to finish layout before we measure element positions.
+function nextFrames(n = 2) {
+    return new Promise(resolve => {
+        const step = (k) => (k <= 0 ? resolve() : requestAnimationFrame(() => step(k - 1)));
+        step(n);
     });
-    return true;
+}
+
+// Resolve once every <img> inside `container` has finished loading (or
+// errored). Caps the wait at `timeoutMs` so a single broken image can't
+// block the scroll forever.
+function waitForImages(container, timeoutMs = 1500) {
+    if (!container) return Promise.resolve();
+    const pending = Array.from(container.querySelectorAll('img'))
+        .filter(img => !img.complete);
+    if (pending.length === 0) return Promise.resolve();
+    const loaded = Promise.all(pending.map(img => new Promise(res => {
+        img.addEventListener('load', res, { once: true });
+        img.addEventListener('error', res, { once: true });
+    })));
+    const timeout = new Promise(res => setTimeout(res, timeoutMs));
+    return Promise.race([loaded, timeout]);
+}
+
+// Apply a scroll action a few times across the layout-settle window:
+//   1. after 2 frames (layout is done, images maybe not)
+//   2. after all images inside the container have loaded (heights final)
+// If the user starts scrolling manually we stop re-applying, so we never
+// yank the position out from under them.
+async function scrollWithSettle(container, applyScroll) {
+    if (!container) return;
+
+    let userScrolled = false;
+    const markUserScroll = () => { userScrolled = true; };
+    container.addEventListener('wheel', markUserScroll, { passive: true });
+    container.addEventListener('touchmove', markUserScroll, { passive: true });
+
+    try {
+        // Pass 1 — layout should be ready after two frames.
+        await nextFrames(2);
+        if (userScrolled) return;
+        applyScroll();
+
+        // Pass 2 — wait for images so any height below the target row is final.
+        await waitForImages(container, 1500);
+        await nextFrames(1);
+        if (userScrolled) return;
+        applyScroll();
+    } finally {
+        container.removeEventListener('wheel', markUserScroll);
+        container.removeEventListener('touchmove', markUserScroll);
+    }
 }
 
 // Scroll `row` into the vertical middle of `container`.
@@ -1761,7 +1802,7 @@ function insertUnreadDivider(container, firstUnreadId) {
 // because scrollIntoView is unreliable inside Telegram's WebView when
 // the document body itself is not the scroll container.
 function scrollRowIntoCenter(row, container) {
-    if (!row || !container) return;
+    if (!row || !container || !row.isConnected) return;
     void container.offsetHeight; // force reflow so measurements are fresh
 
     const containerRect = container.getBoundingClientRect();
@@ -1774,14 +1815,32 @@ function scrollRowIntoCenter(row, container) {
     container.scrollTop = Math.max(0, desired);
 }
 
-// Reliable "pin to bottom" — also waits for layout.
+// Reliable "pin to bottom" — apply after layout AND after images load so
+// late image heights don't leave us stranded above the last message.
 function scrollContainerToBottom(container) {
     if (!container) return;
-    requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-            container.scrollTop = container.scrollHeight;
-        });
+    scrollWithSettle(container, () => {
+        container.scrollTop = container.scrollHeight;
     });
+}
+
+// Insert a "New Messages" divider right above the first unread message and
+// scroll it into the middle of the viewport. Uses the settle-aware scroller
+// so the row's measured position is correct even if images are present.
+function insertUnreadDivider(container, firstUnreadId) {
+    if (!container || !firstUnreadId) return false;
+    const target = container.querySelector(`[data-msg-id="${firstUnreadId}"]`);
+    if (!target || !target.parentNode) return false;
+
+    if (container.querySelector('.unread-divider')) return false;
+
+    const divider = document.createElement('div');
+    divider.className = 'unread-divider';
+    divider.innerHTML = '<span>New Messages</span>';
+    target.parentNode.insertBefore(divider, target);
+
+    scrollWithSettle(container, () => scrollRowIntoCenter(target, container));
+    return true;
 }
 
 // -------------------- USER SIDE --------------------
