@@ -454,22 +454,74 @@ async def support_send(request: Request):
 
 
 @app.get("/api/support/messages")
-async def support_messages(telegram_id: int, since_id: Optional[int] = None):
+async def support_messages(
+    telegram_id: int,
+    since_id: Optional[int] = None,
+    before_id: Optional[int] = None,
+    limit: Optional[int] = None,
+):
+    """
+    Paginated support messages endpoint.
+
+    Three modes:
+      • since_id  → poll for messages NEWER than that id (ascending). Used by
+                    the 5s polling loop. has_more is always False here.
+      • before_id → load the previous page of OLDER messages. Server fetches
+                    DESC (newest-first) with `limit`, then reverses so the
+                    client always receives them in chronological order.
+                    has_more = (rows returned == limit).
+      • (neither) → initial load. Returns the LATEST `limit` messages in
+                    chronological order. has_more = (rows returned == limit).
+
+    The 7-day cleanup routine runs in a background thread so it never blocks
+    the response.
+    """
     # Kick off the throttled cleanup in the background so user-facing requests
     # stay fast and cleanup happens regularly even without admin activity.
     threading.Thread(target=_maybe_cleanup_old_conversations, daemon=True).start()
 
     try:
-        query = (
+        base_query = (
             supabase.table("support_messages")
             .select("*")
             .eq("telegram_id", telegram_id)
-            .order("created_at")
         )
+
+        # --- Poll for NEWER messages (ascending from since_id) ---
         if since_id:
-            query = query.gt("id", since_id)
-        result = query.execute()
-        return {"status": "success", "messages": result.data or []}
+            result = base_query.gt("id", since_id).order("id").execute()
+            return {
+                "status": "success",
+                "messages": result.data or [],
+                "has_more": False,
+            }
+
+        # --- Load a page of OLDER messages (paginate backwards) ---
+        if before_id:
+            q = base_query.lt("id", before_id).order("id", desc=True)
+            if limit:
+                q = q.limit(limit)
+            result = q.execute()
+            msgs = list(reversed(result.data or []))
+            has_more = bool(limit and len(msgs) == limit)
+            return {
+                "status": "success",
+                "messages": msgs,
+                "has_more": has_more,
+            }
+
+        # --- Initial load: return the LATEST `limit` messages (ascending) ---
+        q = base_query.order("id", desc=True)
+        if limit:
+            q = q.limit(limit)
+        result = q.execute()
+        msgs = list(reversed(result.data or []))
+        has_more = bool(limit and len(msgs) == limit)
+        return {
+            "status": "success",
+            "messages": msgs,
+            "has_more": has_more,
+        }
     except Exception as e:
         logger.error(f"Support messages error: {e}")
         return {"status": "error", "messages": []}
