@@ -5,6 +5,54 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>Nanogamz</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
+
+    <!-- ============================================================
+         If the page was opened OUTSIDE Telegram (e.g. a direct
+         Vercel URL in a normal browser), bounce the user straight
+         into the Telegram mini app.
+         Add ?noRedirect=1 to the URL to skip this (dev preview).
+         ============================================================ -->
+    <script>
+    (function () {
+        // --- Developer escape hatch: open with ?noRedirect=1 to skip ---
+        try {
+            const params = new URLSearchParams(window.location.search);
+            if (params.get('noRedirect') === '1') return;
+        } catch (_) { /* ignore */ }
+
+        let insideTelegram = false;
+        try {
+            const tg = window.Telegram && window.Telegram.WebApp;
+            insideTelegram = !!(
+                tg && (
+                    (tg.initData && tg.initData.length > 0) ||
+                    (tg.initDataUnsafe && tg.initDataUnsafe.user)
+                )
+            );
+        } catch (_) { /* fall through as "not in Telegram" */ }
+
+        if (insideTelegram) return;
+
+        // Forward a deep-link param if one was supplied
+        // (e.g. https://yourapp.com/?startapp=game123).
+        let startParam = '';
+        try {
+            const p = new URLSearchParams(window.location.search);
+            startParam =
+                p.get('tgWebAppStartParam') ||
+                p.get('startapp') ||
+                '';
+        } catch (_) { /* ignore */ }
+
+        const botLink = startParam
+            ? 'https://t.me/Nanogamz_bot?startapp=' + encodeURIComponent(startParam)
+            : 'https://t.me/Nanogamz_bot?startapp';
+
+        // replace() so the back button doesn't bounce the user back here.
+        window.location.replace(botLink);
+    })();
+    </script>
+
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.css" />
     <link rel="stylesheet" href="style.css" />
 </head>
