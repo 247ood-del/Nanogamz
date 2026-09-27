@@ -1171,9 +1171,14 @@ body.search-open .game-grid {
 
 /* --- Image bubble --- */
 .support-bubble.image-only {
-    padding: 4px;
-    background: transparent;
+    padding: 6px;
+    background: rgba(255, 255, 255, 0.05); /* Darker background so it doesn't look white */
     max-width: 78%;
+    min-height: 100px; /* Prevents collapse */
+    min-width: 100px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 .support-bubble.image-only .support-time {
     padding: 0 4px 2px;
@@ -1185,7 +1190,20 @@ body.search-open .game-grid {
     border-radius: 12px;
     cursor: zoom-in;
     background: #2a2a2a;
-    object-fit: cover;
+    object-fit: contain; /* Changed from cover to contain to avoid cropping */
+    min-height: 80px; /* Gives it height while loading */
+    min-width: 80px;
+}
+.image-fallback {
+    padding: 16px;
+    font-size: 13px;
+    color: #ff5555;
+    text-align: center;
+    background: rgba(255, 0, 0, 0.1);
+    border-radius: 8px;
+    border: 1px dashed rgba(255, 0, 0, 0.3);
+    width: 100%;
+    box-sizing: border-box;
 }
 
 /* --- Link options modal --- */
