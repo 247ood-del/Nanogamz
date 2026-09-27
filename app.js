@@ -1261,28 +1261,56 @@ function buildSupportBubbleRow(msg, role) {
     if (isImage) {
         bubble.classList.add('image-only');
         const imageSrc = rawMessage.substring(7);
-        const img = document.createElement('img');
-        img.className = 'support-image';
-        img.src = imageSrc;
-        img.alt = 'image';
-        img.loading = 'lazy';
-        img.addEventListener('click', (e) => {
-            e.stopPropagation();
-            openImagePreview(imageSrc);
-        });
 
-        img.onerror = () => {
-            img.style.display = 'none';
+        // Validate URL format before attempting to render.
+        if (!imageSrc || (!imageSrc.startsWith('http://') && !imageSrc.startsWith('https://'))) {
             const fallback = document.createElement('div');
-            fallback.style.padding = '10px';
-            fallback.style.fontSize = '12px';
-            fallback.style.color = '#ff5555';
-            fallback.style.textAlign = 'center';
-            fallback.textContent = '❌ Image failed to load';
+            fallback.className = 'image-fallback';
+            fallback.textContent = '❌ Invalid image URL';
             bubble.appendChild(fallback);
-        };
+        } else {
+            const img = document.createElement('img');
+            img.className = 'support-image';
+            img.src = imageSrc;
+            img.alt = 'image';
+            img.loading = 'lazy';
 
-        bubble.appendChild(img);
+            let imgFinished = false;
+
+            // Timeout if image takes too long to load (15 seconds).
+            const loadTimeout = setTimeout(() => {
+                if (imgFinished) return;
+                imgFinished = true;
+                img.style.display = 'none';
+                const fallback = document.createElement('div');
+                fallback.className = 'image-fallback';
+                fallback.textContent = '❌ Image timed out';
+                bubble.appendChild(fallback);
+            }, 15000);
+
+            img.onload = () => {
+                imgFinished = true;
+                clearTimeout(loadTimeout);
+            };
+
+            img.onerror = () => {
+                if (imgFinished) return;
+                imgFinished = true;
+                clearTimeout(loadTimeout);
+                img.style.display = 'none';
+                const fallback = document.createElement('div');
+                fallback.className = 'image-fallback';
+                fallback.textContent = '❌ Image failed to load';
+                bubble.appendChild(fallback);
+            };
+
+            img.addEventListener('click', (e) => {
+                e.stopPropagation();
+                openImagePreview(imageSrc);
+            });
+
+            bubble.appendChild(img);
+        }
     } else {
         const textEl = document.createElement('div');
         textEl.className = 'support-text';
